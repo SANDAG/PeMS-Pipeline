@@ -64,7 +64,7 @@ HOLIDAY_ROWS = [
 
 
 @dp.materialized_view(
-    name="ref_pems_holidays",
+    name="ref_pems_holidays_vsc",
     comment="Holiday and residual travel dates excluded from PeMS analysis",
     schema=HOLIDAY_SCHEMA,
 )

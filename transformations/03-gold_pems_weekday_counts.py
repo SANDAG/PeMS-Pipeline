@@ -41,7 +41,7 @@ def weighted_period_average(
     )
 
 @dp.materialized_view(
-    name="gold_pems_weekday_counts",
+    name="gold_pems_weekday_counts_vsc",
     comment=(
         "Sample-weighted average nonholiday weekday traffic counts "
         "by station for September and October 2025"
@@ -53,7 +53,7 @@ def weighted_period_average(
 def create_gold_pems_weekday_counts():
 
     silver = (
-        spark.read.table("silver_pems_weekday_counts")
+        spark.read.table("silver_pems_weekday_counts_vsc")
         .filter(F.col("year") == 2025)
         .filter(F.col("month_number").isin(9, 10))
     )

@@ -1,0 +1,25 @@
+# This defines the bundle
+resources:
+  pipelines:
+    pems_pipeline5:
+      name: PeMS-Pipeline5
+      serverless: true
+
+      catalog: travel_data
+      schema: pems
+
+
+      libraries:
+        - file:
+            path: ../transformations/holidays_2025.py
+        
+        - file:
+            path: ../transformations/01-bronze_raw_pems.py
+
+        - file:
+            path: ../transformations/02-silver_pems_weekday_counts.py
+
+        - file:
+            path: ../transformations/03-gold_pems_weekday_counts.py
+
+        

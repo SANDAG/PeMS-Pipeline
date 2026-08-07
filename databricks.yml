@@ -1,0 +1,27 @@
+# This is a Declarative Automation Bundle definition for PeMS-Pipeline.
+# The Databricks extension requires databricks.yml configuration file.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+
+bundle:
+  name: PeMS-Pipeline5
+
+include: 
+  - resources/*.yml
+ 
+sync:
+  paths:
+    - .
+targets:
+  dev:
+    default: true
+    workspace:
+      # host: put your host URL of databricks here (https://xx.azuredatabricks.net)
+      # Alternatively, you can keep your host/authentication in local Databricks CLI configuration and leave this blank.
+      # e.g., in terminal, type: databricks auth login --host https://xx.azuredatabricks.net
+      root_path: /Workspace/Shared/PeMS-Pipeline5
+
+  ## Optionally, there could be 'staging' or 'prod' targets here.
+  #
+  # prod:
+  #   workspace:
+  #     host: xxx
