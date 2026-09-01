@@ -13,12 +13,22 @@ sync:
     - .
 targets:
   dev:
+    mode: development
     default: true
     workspace:
       # host: put your host URL of databricks here (https://xx.azuredatabricks.net)
       # Alternatively, you can keep your host/authentication in local Databricks CLI configuration and leave this blank.
       # e.g., in terminal, type: databricks auth login --host https://xx.azuredatabricks.net
-      root_path: /Workspace/Shared/PeMS-Pipeline5
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    
+    run_as:
+      user_name: ${workspace.current_user.userName}
+    
+    resources:
+      pipelines:
+        pems_pipeline5:
+          catalog: sandbox
+          schema: ${workspace.current_user.short_name}
 
   ## Optionally, there could be 'staging' or 'prod' targets here.
   #
