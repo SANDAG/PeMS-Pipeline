@@ -2,7 +2,7 @@ from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
 @dp.materialized_view(
-    name="silver_pems_weekday_counts_vsc",
+    name="silver_pems_weekday_counts",
     comment=(
         "Complete nonholiday weekday PeMS counts by station and "
         "3 AM-to-3 AM service date for September and October 2025"
@@ -47,7 +47,7 @@ def create_silver_pems_weekday_counts():
     # -------------------------------------------------------------------------
 
     bronze = (
-        spark.read.table("bronze_raw_pems_vsc")
+        spark.read.table("bronze_raw_pems")
         .select(
             F.col("timestamp"),
             F.col("station"),
@@ -190,7 +190,7 @@ def create_silver_pems_weekday_counts():
     # -------------------------------------------------------------------------
 
     holiday_dates = (
-        spark.read.table("ref_pems_holidays_vsc")
+        spark.read.table("ref_pems_holidays")
         .select("holiday_date")
         .dropDuplicates(["holiday_date"])
     )
