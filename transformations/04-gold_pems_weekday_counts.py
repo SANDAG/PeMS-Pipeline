@@ -53,9 +53,10 @@ def weighted_period_average(
 def create_gold_pems_weekday_counts():
 
     silver = (
-        spark.read.table("silver_pems_weekday_counts")
+        spark.read.table("silver_pems_quality")
         .filter(F.col("year") == 2025)
         .filter(F.col("month_number").isin(9, 10))
+        .filter(F.col("qc_pass"))
     )
 
     return (

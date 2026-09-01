@@ -2,41 +2,38 @@ from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
 @dp.materialized_view(
-    name="silver_pems_weekday_counts",
+    name="silver_pems_station_days",
     comment=(
-        "Complete nonholiday weekday PeMS counts by station and "
-        "3 AM-to-3 AM service date for September and October 2025"
+        "Nonholiday weekday PeMS station-day counts and "
+        "data completeness metrics for September and October 2025"
     ),
     table_properties={
         "quality": "silver",
-        "delta.feature.timestampNtz": "supported"
+        "delta.feature.timestampNtz": "supported",
     },
 )
-@dp.expect_or_drop(
-    "station_is_present",
-    "station IS NOT NULL",
-)
-@dp.expect_or_drop(
+
+@dp.expect(
     "complete_day",
     "periods_day = 288",
 )
-@dp.expect_or_drop(
+@dp.expect(
     "complete_ea",
     "periods_ea = 36",
 )
-@dp.expect_or_drop(
+@dp.expect(
     "complete_am",
     "periods_am = 36",
 )
-@dp.expect_or_drop(
+@dp.expect(
     "complete_md",
     "periods_md = 78",
 )
-@dp.expect_or_drop(
+@dp.expect(
     "complete_pm",
     "periods_pm = 42",
 )
-@dp.expect_or_drop(
+@dp.expect(
     "complete_ev",
     "periods_ev = 96",
 )
@@ -375,12 +372,6 @@ def create_silver_pems_weekday_counts():
 
     return (
         station_day_counts
-        .filter(F.col("periods_day") == 288)
-        .filter(F.col("periods_ea") == 36)
-        .filter(F.col("periods_am") == 36)
-        .filter(F.col("periods_md") == 78)
-        .filter(F.col("periods_pm") == 42)
-        .filter(F.col("periods_ev") == 96)
         .withColumn(
             "analysis_period",
             F.lit("September-October 2025"),

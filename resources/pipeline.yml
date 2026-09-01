@@ -17,9 +17,12 @@ resources:
             path: ../transformations/01-bronze_raw_pems.py
 
         - file:
-            path: ../transformations/02-silver_pems_weekday_counts.py
+            path: ../transformations/02-silver_pems_station_days.py
 
         - file:
-            path: ../transformations/03-gold_pems_weekday_counts.py
+            path: ../transformations/03-silver_pems_quality.py
+
+        - file:
+            path: ../transformations/04-gold_pems_weekday_counts.py
 
         
