@@ -1,0 +1,101 @@
+---
+title: "PeMS Data Quality"
+subtitle: "September–October 2025"
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+
+import pandas as pd
+
+summary = pd.read_csv("data/qc_summary.csv")
+period_failures = pd.read_csv("data/qc_period_failures.csv")
+
+# Normalize qc_pass in case CSV reads it as string
+summary["qc_pass"] = (
+    summary["qc_pass"]
+    .astype(str)
+    .str.strip()
+    .str.lower()
+)
+
+total = summary["station_days"].sum()
+
+passed = summary.loc[
+    summary["qc_pass"] == "true",
+    "station_days",
+].sum()
+
+failed = total - passed
+
+pass_rate = 100 * passed / total if total else 0
+```
+
+## Overview
+
+This report summarizes completeness and quality checks applied to PeMS
+station-day observations used to develop weekday traffic counts.
+
+| Measure | Value |
+|---|---:|
+| Station-days evaluated | `{python} f"{total:,.0f}"` |
+| Station-days passing QC | `{python} f"{passed:,.0f}"` |
+| Station-days failing QC | `{python} f"{failed:,.0f}"` |
+| QC pass rate | `{python} f"{pass_rate:.1f}%"` |
+
+## Completeness by Time Period
+
+The table below shows the number of station-days that do not contain the
+expected number of five-minute observations in each model time period.
+
+```{python}
+#| echo: false
+
+periods = (
+    period_failures
+    .rename(
+        columns={
+            "ea_failures": "EA",
+            "am_failures": "AM",
+            "md_failures": "MD",
+            "pm_failures": "PM",
+            "ev_failures": "EV",
+        }
+    )
+    .T
+    .reset_index()
+)
+
+periods.columns = [
+    "Time period",
+    "Incomplete station-days",
+]
+
+periods["Incomplete station-days"] = (
+    periods["Incomplete station-days"]
+    .astype(int)
+)
+
+periods
+```
+
+## Quality Criteria
+
+A station-day currently passes QA/QC when all expected five-minute
+observations are present.
+
+| Time period | Expected observations |
+|---|---:|
+| EA | 36 |
+| AM | 36 |
+| MD | 78 |
+| PM | 42 |
+| EV | 96 |
+| Full service day | 288 |
+
+The service day is defined from **3:00 AM to 3:00 AM** the following day.
+
+At this stage, the QA/QC criteria focus on data completeness. Additional
+checks, such as percent observed, detector reliability, and traffic-count
+reasonableness, can be incorporated as the quality framework is expanded.

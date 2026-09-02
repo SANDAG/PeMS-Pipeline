@@ -1,0 +1,16 @@
+project:
+  type: website
+  output-dir: ../../docs/pems_quality
+
+website:
+  title: "PeMS Data Quality"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Overview
+
+format:
+  html:
+    toc: true
+    code-fold: true
+    code-tools: true

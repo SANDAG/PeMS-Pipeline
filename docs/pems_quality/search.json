@@ -1,0 +1,30 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "PeMS Data Quality",
+    "section": "",
+    "text": "This report summarizes completeness and quality checks applied to PeMS station-day observations used to develop weekday traffic counts.\n\n\n\nMeasure\nValue\n\n\n\n\nStation-days evaluated\n39,784\n\n\nStation-days passing QC\n35,152\n\n\nStation-days failing QC\n4,632\n\n\nQC pass rate\n88.4%"
+  },
+  {
+    "objectID": "index.html#overview",
+    "href": "index.html#overview",
+    "title": "PeMS Data Quality",
+    "section": "",
+    "text": "This report summarizes completeness and quality checks applied to PeMS station-day observations used to develop weekday traffic counts.\n\n\n\nMeasure\nValue\n\n\n\n\nStation-days evaluated\n39,784\n\n\nStation-days passing QC\n35,152\n\n\nStation-days failing QC\n4,632\n\n\nQC pass rate\n88.4%"
+  },
+  {
+    "objectID": "index.html#completeness-by-time-period",
+    "href": "index.html#completeness-by-time-period",
+    "title": "PeMS Data Quality",
+    "section": "Completeness by Time Period",
+    "text": "Completeness by Time Period\nThe table below shows the number of station-days that do not contain the expected number of five-minute observations in each model time period.\n\n\n\n\n\n\n\n\n\nTime period\nIncomplete station-days\n\n\n\n\n0\nEA\n1371\n\n\n1\nAM\n1363\n\n\n2\nMD\n1417\n\n\n3\nPM\n1190\n\n\n4\nEV\n3396"
+  },
+  {
+    "objectID": "index.html#quality-criteria",
+    "href": "index.html#quality-criteria",
+    "title": "PeMS Data Quality",
+    "section": "Quality Criteria",
+    "text": "Quality Criteria\nA station-day currently passes QA/QC when all expected five-minute observations are present.\n\n\n\nTime period\nExpected observations\n\n\n\n\nEA\n36\n\n\nAM\n36\n\n\nMD\n78\n\n\nPM\n42\n\n\nEV\n96\n\n\nFull service day\n288\n\n\n\nThe service day is defined from 3:00 AM to 3:00 AM the following day.\nAt this stage, the QA/QC criteria focus on data completeness. Additional checks, such as percent observed, detector reliability, and traffic-count reasonableness, can be incorporated as the quality framework is expanded."
+  }
+]
