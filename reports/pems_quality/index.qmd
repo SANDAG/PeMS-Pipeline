@@ -1,18 +1,79 @@
 ---
 title: "PeMS Data Quality"
 subtitle: "September–October 2025"
-jupyter: python3
+jupyter: pems-quarto
 ---
 
 ```{python}
 #| echo: false
+#| warning: false
 
+import logging
+import os
+import warnings
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import pandas as pd
+from databricks import sql
+from databricks.sdk.core import Config
+from databricks.sdk import WorkspaceClient
+from matplotlib.ticker import FuncFormatter
 
-summary = pd.read_csv("data/qc_summary.csv")
-period_failures = pd.read_csv("data/qc_period_failures.csv")
 
-# Normalize qc_pass in case CSV reads it as string
+def pct_labels(values, denom):
+    return [f"{v:,.0f}\n({100 * v / denom:.1f}%)" for v in values]
+
+
+def style_bar_axes(ax, max_value):
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    ax.set_ylim(0, max_value * 1.2)
+
+logging.getLogger("databricks.sql").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=".*SQLAlchemy connectable.*")
+
+cfg = Config(profile=os.environ.get("DATABRICKS_CONFIG_PROFILE", "dev"))
+
+catalog = os.environ.get("PEMS_CATALOG", "sandbox")
+schema = os.environ.get("PEMS_SCHEMA")
+if schema is None:
+    # Default to the caller's own dev schema (matches the `sandbox.<short_name>`
+    # convention used by the "dev" bundle target in databricks.yml).
+    schema = WorkspaceClient(config=cfg).current_user.me().user_name.split("@")[0]
+
+http_path = os.environ.get(
+    "DATABRICKS_HTTP_PATH", "/sql/1.0/warehouses/bebb2aea2c14f69c" 
+    # this is the workspace ID, no need to change for another user
+)
+
+sql_dir = Path("sql")
+
+
+def read_sql(name):
+    return (sql_dir / f"{name}.sql").read_text()
+
+
+with sql.connect(
+    server_hostname=cfg.host.removeprefix("https://"),
+    http_path=http_path,
+    credentials_provider=lambda: cfg.authenticate,
+) as conn:
+    with conn.cursor() as cur:
+        cur.execute(f"USE CATALOG {catalog}")
+        cur.execute(f"USE SCHEMA {schema}")
+
+    summary = pd.read_sql(read_sql("qc_summary"), conn)
+    period_failures = pd.read_sql(read_sql("qc_period_failures"), conn)
+    row_validity = pd.read_sql(read_sql("qc_row_validity"), conn)
+    samples_flow_crosstab = pd.read_sql(read_sql("qc_samples_flow_crosstab"), conn)
+    stations_dropped = pd.read_sql(read_sql("qc_stations_dropped"), conn)
+    interval_buckets = pd.read_sql(read_sql("qc_interval_availability_buckets"), conn)
+    po_buckets = pd.read_sql(read_sql("qc_percent_observed_buckets"), conn)
+    station_day_po_buckets = pd.read_sql(
+        read_sql("qc_station_day_percent_observed_buckets"), conn
+    )
+
+# Normalize qc_pass in case the connector returns it as a native bool
 summary["qc_pass"] = (
     summary["qc_pass"]
     .astype(str)
@@ -30,12 +91,169 @@ passed = summary.loc[
 failed = total - passed
 
 pass_rate = 100 * passed / total if total else 0
+
+# ---------------------------------------------------------------------------
+# Raw record validity figures
+# ---------------------------------------------------------------------------
+
+total_raw_rows = int(row_validity["total_rows"].iloc[0])
+
+validity_conditions = (
+    row_validity
+    .drop(columns=["total_rows"])
+    .iloc[0]
+    .sort_values(ascending=False)
+)
+
+total_stations = int(stations_dropped["total_stations"].iloc[0])
+stations_with_surviving_rows = int(
+    stations_dropped["stations_with_surviving_rows"].iloc[0]
+)
+stations_fully_dropped = total_stations - stations_with_surviving_rows
+stations_fully_dropped_pct = (
+    100 * stations_fully_dropped / total_stations if total_stations else 0
+)
+
+INTERVAL_BUCKET_ORDER = ["0", "<25", "25-50", "50-75", "75-99", "100"]
+interval_buckets_ordered = (
+    interval_buckets
+    .set_index("bucket")
+    .reindex(INTERVAL_BUCKET_ORDER)
+    .fillna(0)
+    .reset_index()
+)
+
+PO_BUCKET_ORDER = ["0", "<25", "25-50", "50-75", "75-99", "100"]
+po_buckets_ordered = (
+    po_buckets
+    .set_index("bucket")
+    .reindex(PO_BUCKET_ORDER)
+    .fillna(0)
+    .reset_index()
+)
+station_day_po_buckets_ordered = (
+    station_day_po_buckets
+    .set_index("bucket")
+    .reindex(PO_BUCKET_ORDER)
+    .fillna(0)
+    .reset_index()
+)
 ```
 
-## Overview
+## Raw Record Validity
 
-This report summarizes completeness and quality checks applied to PeMS
-station-day observations used to develop weekday traffic counts.
+<div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">2025 PeMS 5-Minute Interval Data</div>
+
+Before station-days are even assembled, individual five-minute records are
+dropped when they fail basic sanity checks (missing timestamp/station,
+non-positive sample counts, or missing traffic-flow values). This section
+measures that upstream loss directly, out of
+`{python} f"{total_raw_rows:,.0f}"` raw records ingested.
+
+```{python}
+#| echo: false
+#| fig-align: center
+
+fig, ax = plt.subplots(figsize=(8, 6))
+labels = [c.replace("_", " ") for c in validity_conditions.index]
+bars = ax.bar(labels, validity_conditions.values, color="#C44E52")
+ax.set_ylabel("Raw records")
+ax.set_title("Raw record validity: failures by condition")
+ax.tick_params(axis="x", labelrotation=30)
+style_bar_axes(ax, validity_conditions.values.max())
+ax.bar_label(
+    bars,
+    labels=pct_labels(validity_conditions.values, total_raw_rows),
+    padding=3,
+)
+fig.tight_layout()
+plt.show()
+```
+
+The two dominant conditions above, invalid sample counts and missing flow
+values, overlap: a record can fail both at once. The chart below shows how
+much each filter catches independently versus together.
+
+```{python}
+#| echo: false
+#| fig-align: center
+
+pivot = samples_flow_crosstab.pivot(
+    index="samples_bucket",
+    columns="total_flow_bucket",
+    values="records",
+).fillna(0)
+
+x = range(len(pivot.index))
+width = 0.35
+
+fig, ax = plt.subplots(figsize=(7, 6))
+bars_not_null = ax.bar(
+    [i - width / 2 for i in x],
+    pivot["NOT NULL"],
+    width,
+    label="total_flow NOT NULL",
+    color="#4C72B0",
+)
+bars_null = ax.bar(
+    [i + width / 2 for i in x],
+    pivot["NULL"],
+    width,
+    label="total_flow NULL",
+    color="#DD8452",
+)
+ax.set_xticks(list(x))
+ax.set_xticklabels([f"samples {v}" for v in pivot.index])
+ax.set_ylabel("Records")
+ax.set_title("Overlap: samples vs. total_flow validity")
+ax.legend()
+style_bar_axes(ax, max(pivot["NOT NULL"].max(), pivot["NULL"].max()))
+ax.bar_label(
+    bars_not_null, labels=pct_labels(pivot["NOT NULL"], total_raw_rows), padding=3
+)
+ax.bar_label(bars_null, labels=pct_labels(pivot["NULL"], total_raw_rows), padding=3)
+fig.tight_layout()
+plt.show()
+```
+
+`{python} f"{stations_fully_dropped:,.0f}"` of
+`{python} f"{total_stations:,.0f}"` stations
+(`{python} f"{stations_fully_dropped_pct:.1f}%"`) have **zero** surviving
+records after filtering — they are entirely absent from every downstream
+table.
+
+Beyond whether a record is valid, `percent_observed` measures how much of
+each five-minute reading is actual sensor data versus imputed/estimated.
+The chart below buckets every raw record (valid or not) by this value.
+No filter on `percent_observed` was adopted as previous filters already addressed most cases (see below).
+
+```{python}
+#| echo: false
+#| fig-align: center
+
+fig, ax = plt.subplots(figsize=(7, 6))
+bars = ax.bar(
+    po_buckets_ordered["bucket"],
+    po_buckets_ordered["records"],
+    color="#4C72B0",
+)
+ax.set_xlabel("percent_observed bucket")
+ax.set_ylabel("Raw records")
+ax.set_title("Raw records by percent_observed bucket")
+style_bar_axes(ax, po_buckets_ordered["records"].max())
+ax.bar_label(
+    bars,
+    labels=pct_labels(po_buckets_ordered["records"], total_raw_rows),
+    padding=3,
+)
+fig.tight_layout()
+plt.show()
+```
+
+## Overview on Station-Day Pairs
+
+<div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">After dropping invalid records, due to sample = 0 or total flow is null</div>
+This table summarizes completeness after filtering invalid records discussed above.
 
 | Measure | Value |
 |---|---:|
@@ -46,11 +264,13 @@ station-day observations used to develop weekday traffic counts.
 
 ## Completeness by Time Period
 
-The table below shows the number of station-days that do not contain the
+The chart below shows the number of station-days that do not contain the
 expected number of five-minute observations in each model time period.
+These are dropped in gold layer.
 
 ```{python}
 #| echo: false
+#| fig-align: center
 
 periods = (
     period_failures
@@ -64,23 +284,75 @@ periods = (
         }
     )
     .T
-    .reset_index()
+    .iloc[:, 0]
 )
 
-periods.columns = [
-    "Time period",
-    "Incomplete station-days",
-]
-
-periods["Incomplete station-days"] = (
-    periods["Incomplete station-days"]
-    .astype(int)
-)
-
-periods
+fig, ax = plt.subplots(figsize=(7, 6))
+bars = ax.bar(periods.index, periods.values, color="#55A868")
+ax.set_xlabel("Time period")
+ax.set_ylabel("Incomplete station-days")
+ax.set_title("Incomplete station-days by time period")
+style_bar_axes(ax, periods.values.max())
+ax.bar_label(bars, labels=pct_labels(periods.values, total), padding=3)
+fig.tight_layout()
+plt.show()
 ```
 
-## Quality Criteria
+Incompleteness isn't all-or-nothing: the chart below buckets every
+station-day by what share of its 288 expected five-minute intervals were
+actually present. Only `{python} f"{1-pass_rate:.1f}%"` were dropped in this process.
+
+```{python}
+#| echo: false
+#| fig-align: center
+
+fig, ax = plt.subplots(figsize=(7, 6))
+bars = ax.bar(
+    interval_buckets_ordered["bucket"],
+    interval_buckets_ordered["station_days"],
+    color="#8172B2",
+)
+ax.set_xlabel("% of 288 daily intervals present")
+ax.set_ylabel("Station-days")
+ax.set_title("Station-days by interval availability")
+style_bar_axes(ax, interval_buckets_ordered["station_days"].max())
+ax.bar_label(
+    bars,
+    labels=pct_labels(interval_buckets_ordered["station_days"], total),
+    padding=3,
+)
+fig.tight_layout()
+plt.show()
+```
+
+Over that same population, the chart below buckets station-days by their
+*average* `percent_observed` — "100" means fully observed all day with no
+imputation; lower buckets rely on increasing amounts of estimated values.
+
+```{python}
+#| echo: false
+#| fig-align: center
+
+fig, ax = plt.subplots(figsize=(7, 6))
+bars = ax.bar(
+    station_day_po_buckets_ordered["bucket"],
+    station_day_po_buckets_ordered["station_days"],
+    color="#C44E52",
+)
+ax.set_xlabel("Average percent_observed bucket")
+ax.set_ylabel("Station-days")
+ax.set_title("Station-days by average percent_observed")
+style_bar_axes(ax, station_day_po_buckets_ordered["station_days"].max())
+ax.bar_label(
+    bars,
+    labels=pct_labels(station_day_po_buckets_ordered["station_days"], total),
+    padding=3,
+)
+fig.tight_layout()
+plt.show()
+```
+
+## Completeness Criteria
 
 A station-day currently passes QA/QC when all expected five-minute
 observations are present.
@@ -95,7 +367,3 @@ observations are present.
 | Full service day | 288 |
 
 The service day is defined from **3:00 AM to 3:00 AM** the following day.
-
-At this stage, the QA/QC criteria focus on data completeness. Additional
-checks, such as percent observed, detector reliability, and traffic-count
-reasonableness, can be incorporated as the quality framework is expanded.

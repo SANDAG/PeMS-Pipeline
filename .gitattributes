@@ -1,0 +1,6 @@
+# Quarto writes these vendored site assets with LF endings on every render.
+# Force LF so re-rendering on Windows (core.autocrlf=true) doesn't produce
+# phantom line-ending-only diffs.
+docs/pems_quality/site_libs/**/*.js text eol=lf
+docs/pems_quality/site_libs/**/*.css text eol=lf
+docs/pems_quality/site_libs/**/*.woff binary

@@ -1,0 +1,15 @@
+-- Raw 5-minute record validity: how many bronze rows fail basic sanity
+-- checks -- the same conditions filtered out before station-day
+-- aggregation in transformations/02-silver_pems_station_days.py -- plus a
+-- couple of extra checks worth tracking (negative flow, missing
+-- percent_observed).
+-- Assumes `USE CATALOG` / `USE SCHEMA` have already set the session context.
+SELECT
+  COUNT(*) AS total_rows,
+  SUM(CASE WHEN timestamp IS NULL THEN 1 ELSE 0 END) AS null_timestamp,
+  SUM(CASE WHEN station IS NULL THEN 1 ELSE 0 END) AS null_station_ID,
+  SUM(CASE WHEN samples IS NULL OR samples <= 0 THEN 1 ELSE 0 END) AS zero_samples,
+  SUM(CASE WHEN total_flow IS NULL THEN 1 ELSE 0 END) AS null_total_flow,
+  SUM(CASE WHEN total_flow < 0 THEN 1 ELSE 0 END) AS negative_total_flow,
+  SUM(CASE WHEN percent_observed IS NULL THEN 1 ELSE 0 END) AS null_percent_observed
+FROM bronze_raw_pems

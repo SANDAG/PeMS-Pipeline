@@ -12,31 +12,7 @@ from pyspark.sql import functions as F
         "delta.feature.timestampNtz": "supported",
     },
 )
-
-@dp.expect(
-    "complete_day",
-    "periods_day = 288",
-)
-@dp.expect(
-    "complete_ea",
-    "periods_ea = 36",
-)
-@dp.expect(
-    "complete_am",
-    "periods_am = 36",
-)
-@dp.expect(
-    "complete_md",
-    "periods_md = 78",
-)
-@dp.expect(
-    "complete_pm",
-    "periods_pm = 42",
-)
-@dp.expect(
-    "complete_ev",
-    "periods_ev = 96",
-)
+ 
 def create_silver_pems_weekday_counts():
 
     # -------------------------------------------------------------------------
