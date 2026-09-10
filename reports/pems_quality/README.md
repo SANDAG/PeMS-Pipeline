@@ -39,7 +39,7 @@ databricks auth login --host <your workspace host> --profile dev
 ```
 Use any profile name; set `DATABRICKS_CONFIG_PROFILE` (see below) if not `dev`.
 
-**1. Deploy and run the pipeline** — populates `bronze_raw_pems` and
+**1. Deploy and run the pipeline** - populates `bronze_raw_pems` and
 `silver_pems_quality` under `sandbox.<your Databricks username>` (the
 schema this report assumes by default):
 ```bash
@@ -82,13 +82,10 @@ override with these env vars instead of step 1:
 Editing the SQL files (`sql/*.sql`)
 ------------------------------------
 `execute: freeze: auto` in `_quarto.yml` means Quarto only re-runs the
-Python code cell when `index.qmd`'s own text changes — it has no idea the
+Python code cell when `index.qmd`'s own text changes - it has no idea the
 code reads external `.sql` files, so editing only a `.sql` file and
 re-rendering normally will silently keep showing old cached results.
-
-`quarto render --execute` does **not** reliably fix this (tested directly —
-it left stale cached figures in place). The reliable fix is to clear the
-freeze cache before rendering:
+The reliable fix is to clear the freeze cache before rendering:
 ```powershell
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue reports/pems_quality/_freeze, reports/pems_quality/.quarto/_freeze
 uv run quarto render reports/pems_quality
