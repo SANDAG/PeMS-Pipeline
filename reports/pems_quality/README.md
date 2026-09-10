@@ -4,15 +4,19 @@ Quarto QA/QC report for PeMS data used by the pipeline.
 
 Data flow
 ---------
-bronze_raw_pems
-      ↓
-silver_pems_station_days
-      ↓
-silver_pems_quality
-      ↓
-gold_pems_weekday_counts
+| Layer  | Table                      |
+| ------ | -------------------------- |
+| Bronze | `bronze_raw_pems`          |
+| ↓      |                            |
+| Silver | `silver_pems_station_days` |
+| ↓      |                            |
+| Silver | `silver_pems_quality`      |
+| ↓      |                            |
+| Gold   | `gold_pems_weekday_counts` |
 
-The report primarily summarizes silver_pems_quality.
+
+The report primarily summarizes `silver_pems_quality` on station-day level
+and `bronze_raw_pems` for raw 5-min records.
 
 The report queries `silver_pems_quality` directly from Databricks via a SQL
 warehouse (see the first code cell in `index.qmd`), authenticating with the
