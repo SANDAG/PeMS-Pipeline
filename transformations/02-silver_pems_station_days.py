@@ -5,7 +5,7 @@ from pyspark.sql import functions as F
     name="silver_pems_station_days",
     comment=(
         "Nonholiday weekday PeMS station-day counts and "
-        "data completeness metrics for September and October 2025"
+        "data completeness metrics for September and October, 2022-2025"
     ),
     table_properties={
         "quality": "silver",
@@ -140,7 +140,7 @@ def create_silver_pems_weekday_counts():
     )
 
     # -------------------------------------------------------------------------
-    # Keep September and October 2025 service dates.
+    # Keep September and October service dates for 2022-2025.
     #
     # Spark dayofweek:
     #   Sunday = 1
@@ -149,7 +149,7 @@ def create_silver_pems_weekday_counts():
 
     valid_weekdays = (
         periodized
-        .filter(F.col("year") == 2025)
+        .filter(F.col("year").isin(2022, 2023, 2024, 2025))
         .filter(F.col("month_number").isin(9, 10))
         .filter(
             ~F.dayofweek("service_date").isin(1, 7)
@@ -350,7 +350,7 @@ def create_silver_pems_weekday_counts():
         station_day_counts
         .withColumn(
             "analysis_period",
-            F.lit("September-October 2025"),
+            F.concat(F.lit("September-October "), F.col("year")),
         )
         .select(
             "service_date",

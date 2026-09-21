@@ -1,6 +1,6 @@
 ---
 title: "PeMS Data Quality"
-subtitle: "September–October 2025"
+subtitle: "September–October 2022-2025"
 jupyter: pems-quarto
 ---
 
@@ -72,6 +72,18 @@ with sql.connect(
     station_day_po_buckets = pd.read_sql(
         read_sql("qc_station_day_percent_observed_buckets"), conn
     )
+    monthly_detector_health = pd.read_sql(
+        read_sql("qc_monthly_detector_health"), conn
+    )
+    po_histogram = pd.read_sql(
+        read_sql("qc_percent_observed_histogram"), conn
+    )
+    station_day_po_histogram = pd.read_sql(
+        read_sql("qc_station_day_percent_observed_histogram"), conn
+    )
+    monthly_station_day_health = pd.read_sql(
+        read_sql("qc_monthly_station_day_health"), conn
+    )
 
 # Normalize qc_pass in case the connector returns it as a native bool
 summary["qc_pass"] = (
@@ -138,6 +150,176 @@ station_day_po_buckets_ordered = (
     .fillna(0)
     .reset_index()
 )
+
+monthly_detector_health_display = (
+    monthly_detector_health
+    .sort_values(["year", "month_number"])
+    .rename(columns={
+        "month": "Month",
+        "stations": "Stations",
+        "expected_station_day_intervals": "Expected station-day intervals",
+        "detector_health_100": "Detector health at 100%",
+        "detector_health_80": "Detector health at 80%",
+        "detector_health_50": "Detector health at 50%",
+    })
+    [[
+        "Month",
+        "Stations",
+        "Expected station-day intervals",
+        "Detector health at 100%",
+        "Detector health at 80%",
+        "Detector health at 50%",
+    ]]
+)
+
+PO_HISTOGRAM_ORDER = [
+    "0-9", "10-19", "20-29", "30-39", "40-49",
+    "50-59", "60-69", "70-79", "80-89", "90-99", "100",
+]
+po_histogram_ordered = (
+    po_histogram
+    .set_index("bucket")
+    .reindex(PO_HISTOGRAM_ORDER)
+    .fillna(0)
+    .reset_index()
+)
+total_po_histogram_records = po_histogram["records"].sum()
+
+station_day_po_histogram_ordered = (
+    station_day_po_histogram
+    .set_index("bucket")
+    .reindex(PO_HISTOGRAM_ORDER)
+    .fillna(0)
+    .reset_index()
+)
+total_station_day_po_histogram = station_day_po_histogram["station_days"].sum()
+
+monthly_station_day_health_display = (
+    monthly_station_day_health
+    .sort_values(["year", "month_number"])
+    .rename(columns={
+        "month": "Month",
+        "stations": "Stations",
+        "station_days": "Station-days",
+        "detector_health_100": "Detector health at 100%",
+        "detector_health_80": "Detector health at 80%",
+        "detector_health_50": "Detector health at 50%",
+    })
+    [[
+        "Month",
+        "Stations",
+        "Station-days",
+        "Detector health at 100%",
+        "Detector health at 80%",
+        "Detector health at 50%",
+    ]]
+)
+```
+
+## Monthly Detector Health
+
+<div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">2022–2025, September and October — the rest of this report covers 2025 only</div>
+
+Expected station-day intervals is stations × nonholiday weekdays in the
+month × 288 five-minute intervals per day. Detector health at a given
+threshold is the share of those expected intervals that were actually
+observed with `percent_observed` at or above that threshold — the higher
+the threshold, the less imputed/estimated data is tolerated.
+
+```{python}
+#| echo: false
+
+(
+    monthly_detector_health_display.style
+    .format({
+        "Stations": "{:,.0f}",
+        "Expected station-day intervals": "{:,.0f}",
+        "Detector health at 100%": "{:.0%}",
+        "Detector health at 80%": "{:.0%}",
+        "Detector health at 50%": "{:.0%}",
+    })
+    .hide(axis="index")
+)
+```
+
+The chart below shows the same population's `percent_observed` distribution
+at the individual five-minute record level, in 10-point buckets — this is
+what the detector health percentages above are computed from.
+
+```{python}
+#| echo: false
+#| fig-align: center
+
+fig, ax = plt.subplots(figsize=(9, 6))
+bars = ax.bar(
+    po_histogram_ordered["bucket"],
+    po_histogram_ordered["records"],
+    color="#4C72B0",
+)
+ax.set_xlabel("percent_observed (5-minute record)")
+ax.set_ylabel("Records")
+ax.set_title("Distribution of percent_observed at the 5-minute record level")
+ax.tick_params(axis="x", labelrotation=30)
+style_bar_axes(ax, po_histogram_ordered["records"].max())
+ax.bar_label(
+    bars,
+    labels=pct_labels(po_histogram_ordered["records"], total_po_histogram_records),
+    padding=3,
+)
+fig.tight_layout()
+plt.show()
+```
+
+The table below shows the same metric averaged up to the station-day level
+instead of the individual interval level — each station-day's
+`average_percent_observed` from `silver_pems_quality`, at the same
+100/80/50 thresholds.
+
+```{python}
+#| echo: false
+
+(
+    monthly_station_day_health_display.style
+    .format({
+        "Stations": "{:,.0f}",
+        "Station-days": "{:,.0f}",
+        "Detector health at 100%": "{:.0%}",
+        "Detector health at 80%": "{:.0%}",
+        "Detector health at 50%": "{:.0%}",
+    })
+    .hide(axis="index")
+)
+```
+
+The chart below shows the same station-day population's
+`average_percent_observed` distribution, bucketed the same way as the
+interval-level chart above.
+
+```{python}
+#| echo: false
+#| fig-align: center
+
+fig, ax = plt.subplots(figsize=(9, 6))
+bars = ax.bar(
+    station_day_po_histogram_ordered["bucket"],
+    station_day_po_histogram_ordered["station_days"],
+    color="#55A868",
+)
+ax.set_xlabel("average percent_observed (station-day)")
+ax.set_ylabel("Station-days")
+ax.set_title("Distribution of average percent_observed at the station-day level")
+ax.tick_params(axis="x", labelrotation=30)
+style_bar_axes(ax, station_day_po_histogram_ordered["station_days"].max())
+ax.bar_label(
+    bars,
+    labels=pct_labels(
+        station_day_po_histogram_ordered["station_days"],
+        total_station_day_po_histogram,
+    ),
+    padding=3,
+)
+fig.tight_layout()
+plt.show()
 ```
 
 ## Raw Record Validity
@@ -252,6 +434,8 @@ plt.show()
 
 ## Overview on Station-Day Pairs
 
+<div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">2025 PeMS Aggregated at Station-Day Level</div>
+
 <div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">After dropping invalid records, due to sample = 0 or total flow is null</div>
 This table summarizes completeness after filtering invalid records discussed above.
 
@@ -263,6 +447,7 @@ This table summarizes completeness after filtering invalid records discussed abo
 | QC pass rate | `{python} f"{pass_rate:.1f}%"` |
 
 ## Completeness by Time Period
+<div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">2025 PeMS</div>
 
 The chart below shows the number of station-days that do not contain the
 expected number of five-minute observations in each model time period.

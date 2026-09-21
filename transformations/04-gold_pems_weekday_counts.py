@@ -44,7 +44,7 @@ def weighted_period_average(
     name="gold_pems_weekday_counts",
     comment=(
         "Sample-weighted average nonholiday weekday traffic counts "
-        "by station for September and October 2025"
+        "by station for September and October, 2022-2025"
     ),
     table_properties={
         "quality": "gold"
@@ -54,7 +54,7 @@ def create_gold_pems_weekday_counts():
 
     silver = (
         spark.read.table("silver_pems_quality")
-        .filter(F.col("year") == 2025)
+        .filter(F.col("year").isin(2022, 2023, 2024, 2025))
         .filter(F.col("month_number").isin(9, 10))
         .filter(F.col("qc_pass"))
     )
@@ -133,7 +133,7 @@ def create_gold_pems_weekday_counts():
         )
         .withColumn(
             "analysis_period",
-            F.lit("September-October 2025"),
+            F.concat(F.lit("September-October "), F.col("year")),
         )
         .select(
             "year",

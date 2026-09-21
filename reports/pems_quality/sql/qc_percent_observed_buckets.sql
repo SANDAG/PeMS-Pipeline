@@ -1,7 +1,9 @@
 -- Distribution of raw bronze records by percent_observed bucket. Different
 -- from qc_row_validity.sql's null check -- this shows the shape of sensor
 -- reliability/imputation across all raw records, not just whether the
--- value is missing.
+-- value is missing. Scoped to 2025 to match the rest of this report's
+-- narrative (see reports/pems_quality/index.qmd); the pipeline itself
+-- covers 2022-2025.
 -- Assumes `USE CATALOG` / `USE SCHEMA` have already set the session context.
 SELECT
   CASE
@@ -16,4 +18,5 @@ SELECT
   END AS bucket,
   COUNT(*) AS records
 FROM bronze_raw_pems
+WHERE YEAR(timestamp) = 2025
 GROUP BY bucket

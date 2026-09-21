@@ -2,6 +2,8 @@
 -- same nonholiday Sep-Oct 2025 weekday population as the completeness
 -- checks. "100" = fully observed all day, no imputation; lower buckets =
 -- station-days relying on increasing amounts of imputed/estimated values.
+-- Scoped to 2025 to match the rest of this report's narrative (see
+-- reports/pems_quality/index.qmd); the pipeline itself covers 2022-2025.
 -- Assumes `USE CATALOG` / `USE SCHEMA` have already set the session context.
 SELECT
   CASE
@@ -16,4 +18,5 @@ SELECT
   END AS bucket,
   COUNT(*) AS station_days
 FROM silver_pems_quality
+WHERE year = 2025
 GROUP BY bucket

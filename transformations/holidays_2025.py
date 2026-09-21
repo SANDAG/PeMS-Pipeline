@@ -18,6 +18,18 @@ HOLIDAY_SCHEMA = StructType(
 
 
 HOLIDAY_ROWS = [
+    ("2022-09-05", "Labor Day", "Actual"),
+    ("2022-09-06", "Labor Day", "Residual"),
+    ("2022-10-10", "Columbus Day", "Actual"),
+    ("2022-10-11", "Columbus Day", "Residual"),
+    ("2023-09-04", "Labor Day", "Actual"),
+    ("2023-09-05", "Labor Day", "Residual"),
+    ("2023-10-09", "Columbus Day", "Actual"),
+    ("2023-10-10", "Columbus Day", "Residual"),
+    ("2024-09-02", "Labor Day", "Actual"),
+    ("2024-09-03", "Labor Day", "Residual"),
+    ("2024-10-14", "Columbus Day", "Actual"),
+    ("2024-10-15", "Columbus Day", "Residual"),
     ("2025-01-01", "New Years", "Actual"),
     ("2025-01-02", "New Years", "Residual"),
     ("2025-01-03", "New Years", "Residual"),
