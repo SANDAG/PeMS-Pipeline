@@ -223,8 +223,10 @@ monthly_station_day_health_display = (
 Expected station-day intervals is stations × nonholiday weekdays in the
 month × 288 five-minute intervals per day. Detector health at a given
 threshold is the share of those expected intervals that were actually
-observed with `percent_observed` at or above that threshold — the higher
-the threshold, the less imputed/estimated data is tolerated.
+observed with `percent_observed` at or above that threshold - the higher
+the threshold, the less imputed/estimated data is tolerated. Data shown here 
+are filtered to exclude invalid records, keeping only samples > 0
+AND total_flow IS NOT NULL.
 
 ```{python}
 #| echo: false
@@ -243,7 +245,7 @@ the threshold, the less imputed/estimated data is tolerated.
 ```
 
 The chart below shows the same population's `percent_observed` distribution
-at the individual five-minute record level, in 10-point buckets — this is
+at the individual five-minute record level, in 10-point buckets. This is
 what the detector health percentages above are computed from.
 
 ```{python}
@@ -271,7 +273,7 @@ plt.show()
 ```
 
 The table below shows the same metric averaged up to the station-day level
-instead of the individual interval level — each station-day's
+instead of the individual interval level - each station-day's
 `average_percent_observed` from `silver_pems_quality`, at the same
 100/80/50 thresholds.
 
