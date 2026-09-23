@@ -1,6 +1,7 @@
 Purpose
 -------
 Quarto QA/QC report for PeMS data used by the pipeline.
+Public Link: https://sandag.github.io/PeMS-Pipeline/pems_quality/
 
 Data flow
 ---------
