@@ -218,9 +218,9 @@ monthly_station_day_health_display = (
 
 ## Monthly Detector Health
 
-<div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">2022–2025, September and October — the rest of this report covers 2025 only</div>
+<div style="font-size: 0.8em; font-weight: normal; color: #666; margin-top: -0.6em; margin-bottom: 1em;">2022–2025, September and October - the rest of this report covers 2025 only</div>
 
-Expected station-day intervals is stations × nonholiday weekdays in the
+Expected station-day intervals is stations × non-holiday weekdays in the
 month × 288 five-minute intervals per day. Detector health at a given
 threshold is the share of those expected intervals that were actually
 observed with `percent_observed` at or above that threshold - the higher
@@ -331,7 +331,7 @@ plt.show()
 Before station-days are even assembled, individual five-minute records are
 dropped when they fail basic sanity checks (missing timestamp/station,
 non-positive sample counts, or missing traffic-flow values). This section
-measures that upstream loss directly, out of
+measures that upstream loss directly by checking which filters result in records being dropped, out of
 `{python} f"{total_raw_rows:,.0f}"` raw records ingested.
 
 ```{python}
@@ -403,13 +403,13 @@ plt.show()
 `{python} f"{stations_fully_dropped:,.0f}"` of
 `{python} f"{total_stations:,.0f}"` stations
 (`{python} f"{stations_fully_dropped_pct:.1f}%"`) have **zero** surviving
-records after filtering — they are entirely absent from every downstream
+records after filtering - they are entirely absent from every downstream
 table.
 
 Beyond whether a record is valid, `percent_observed` measures how much of
 each five-minute reading is actual sensor data versus imputed/estimated.
 The chart below buckets every raw record (valid or not) by this value.
-No filter on `percent_observed` was adopted as previous filters already addressed most cases (see below).
+No filter on `percent_observed` was adopted as previous filters already addressed most cases (see more analyses in the following section).
 
 ```{python}
 #| echo: false
@@ -487,7 +487,7 @@ plt.show()
 
 Incompleteness isn't all-or-nothing: the chart below buckets every
 station-day by what share of its 288 expected five-minute intervals were
-actually present. Only `{python} f"{1-pass_rate:.1f}%"` were dropped in this process.
+actually present. Only `{python} f"{100 - pass_rate:.1f}%"` were dropped in this process.
 
 ```{python}
 #| echo: false
@@ -513,8 +513,10 @@ plt.show()
 ```
 
 Over that same population, the chart below buckets station-days by their
-*average* `percent_observed` — "100" means fully observed all day with no
+*average* `percent_observed` - "100" means fully observed all day with no
 imputation; lower buckets rely on increasing amounts of estimated values.
+It is clear that most station-days have a high average `percent_observed`, indicating that the previous filters of (1) validity and (2) completeness of 
+5-min intervals were effective in ensuring high data quality.
 
 ```{python}
 #| echo: false
