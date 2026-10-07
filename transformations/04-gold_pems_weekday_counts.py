@@ -44,7 +44,8 @@ def weighted_period_average(
     name="gold_pems_weekday_counts",
     comment=(
         "Sample-weighted average nonholiday weekday traffic counts "
-        "by station for September and October, 2022-2025"
+        "by station for September and October, 2022-2025, from complete, "
+        "fully observed (no imputed values) station-days"
     ),
     table_properties={
         "quality": "gold"
@@ -57,6 +58,7 @@ def create_gold_pems_weekday_counts():
         .filter(F.col("year").isin(2022, 2023, 2024, 2025))
         .filter(F.col("month_number").isin(9, 10))
         .filter(F.col("qc_pass"))
+        .filter(F.col("qc_fully_observed"))
     )
 
     return (

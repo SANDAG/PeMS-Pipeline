@@ -50,6 +50,17 @@ def create_silver_pems_quality():
         )
 
         # ------------------------------------------------------------------
+        # Observation flag: every five-minute value is a real detector
+        # reading (no imputation). Kept separate from qc_pass so the QA
+        # report can still distinguish completeness from imputation.
+        # ------------------------------------------------------------------
+
+        .withColumn(
+            "qc_fully_observed",
+            F.coalesce(F.col("average_percent_observed") >= 100, F.lit(False)),
+        )
+
+        # ------------------------------------------------------------------
         # Overall QC result
         # ------------------------------------------------------------------
 
