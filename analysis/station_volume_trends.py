@@ -3,7 +3,9 @@
 # Run cell by cell (VS Code: "Run Cell" above each `# %%`), or end to end:
 #   uv run python analysis/station_volume_trends.py
 #   uv run python analysis/station_volume_trends.py --lane-types ML,HV
-# Read-only against Databricks; writes a CSV and an HTML map under analysis/.
+# Read-only against Databricks; writes CSVs under analysis/ and the HTML map to
+# docs/station_volume_trends/index.html, which GitHub Pages publishes at
+# https://sandag.github.io/PeMS-Pipeline/station_volume_trends/
 # --lane-types limits both outputs to those PeMS lane types (ML mainline,
 # HV HOV, OR on-ramp, FR off-ramp, FF freeway-to-freeway, ...) and suffixes
 # the file names, e.g. station_volume_trends_ML_HV.csv. Default: all types.
@@ -11,15 +13,20 @@
 # station_volume_totals*.csv (and a table on the map) sums the common
 # stations' average daily volumes per year by lane type, plus a total row.
 #
-# Station-day filter: qc_fully_observed (average_percent_observed = 100, no
-# imputed 5-min values) AND qc_pass (all 288 five-minute intervals present,
-# every period complete) -- the same station-days gold uses.
-# Volume per station-year = average of count_day over its passing station-days,
-# so years with more/fewer passing days stay comparable.
-# Common stations = stations with >= 1 passing station-day in every year.
+# Source: gold_pems_weekday_counts, so station-day filtering lives in the
+# pipeline only. Gold keeps station-days that are complete (qc_pass: all 288
+# five-minute intervals, every period) and fully observed (qc_fully_observed:
+# no imputed values). Volume per station-year = gold's count_day, the
+# sample-weighted average daily volume over those days, so years with
+# more/fewer usable days stay comparable.
+# Common stations = stations with a gold row in every year.
+# The map also shows how many stations survive each data-quality step per
+# year (raw listing -> usable data -> complete days -> fully observed).
 #
-# Trend: compare 2025 with 2022. A station is "decreasing" (red) when its 2025
-# volume is more than DECLINE_PCT % below 2022, else "not decreasing" (blue).
+# Trend: compare 2025 with 2022 (pct = 2025 / 2022 - 1, in %):
+#   pct < -DECLINE_PCT                      -> "decreasing"        (red)
+#   -DECLINE_PCT <= pct <= -SLIGHT_DECLINE  -> "slightly decreasing" (yellow)
+#   pct > -SLIGHT_DECLINE_PCT               -> "not decreasing"    (blue)
 # Year-over-year changes are kept in the CSV and map popups for context.
 
 # %%
@@ -38,7 +45,8 @@ from databricks.sdk.core import Config
 logging.getLogger("databricks.sql").setLevel(logging.ERROR)
 
 YEARS = [2022, 2023, 2024, 2025]
-DECLINE_PCT = 10.0
+DECLINE_PCT = 5.0
+SLIGHT_DECLINE_PCT = 0.1
 METADATA_VOLUME_PATH = (
     "/Volumes/travel_data/pems/raw_pems/station_metadata/d11_text_meta_2022_03_16.txt"
 )
@@ -62,7 +70,7 @@ suffix = "_" + "_".join(LANE_TYPES) if LANE_TYPES else ""
 OUT_DIR = Path(__file__).parent
 CSV_PATH = OUT_DIR / f"station_volume_trends{suffix}.csv"
 TOTALS_PATH = OUT_DIR / f"station_volume_totals{suffix}.csv"
-MAP_PATH = OUT_DIR / "plots" / f"station_volume_trend_map{suffix}.html"
+MAP_PATH = OUT_DIR.parent / "docs" / "station_volume_trends" / f"index{suffix}.html"
 
 cfg = Config(profile=os.environ.get("DATABRICKS_CONFIG_PROFILE", "dev"))
 catalog = os.environ.get("PEMS_CATALOG", "sandbox")
@@ -73,19 +81,43 @@ http_path = os.environ.get(
     "DATABRICKS_HTTP_PATH", "/sql/1.0/warehouses/bebb2aea2c14f69c"
 )
 
-# %% Average daily volume by station and year (passing station-days only)
+# %% Average daily volume by station and year, from gold
 query = """
 SELECT
   station,
   year,
-  FIRST(freeway) AS freeway,
-  FIRST(direction_of_travel) AS direction,
-  FIRST(lane_type) AS lane_type,
-  COUNT(*) AS n_days,
-  AVG(count_day) AS avg_daily_volume
-FROM silver_pems_quality
-WHERE qc_pass AND qc_fully_observed
-GROUP BY station, year
+  freeway,
+  direction_of_travel AS direction,
+  lane_type,
+  number_of_weekdays AS n_days,
+  count_day AS avg_daily_volume
+FROM gold_pems_weekday_counts
+WHERE count_day IS NOT NULL
+"""
+
+# Station-years surviving each data-quality step; one row per (step, station, year).
+lane_filter = (
+    "AND lane_type IN (" + ", ".join(f"'{t}'" for t in LANE_TYPES) + ")"
+    if LANE_TYPES else ""
+)
+funnel_query = f"""
+WITH raw AS (
+  SELECT DISTINCT station, YEAR(timestamp) AS year
+  FROM bronze_raw_pems
+  WHERE MONTH(timestamp) IN (9, 10) {lane_filter}
+),
+days AS (
+  SELECT station, year,
+    MAX(INT(qc_pass)) AS any_complete,
+    MAX(INT(qc_pass AND qc_fully_observed)) AS any_full
+  FROM silver_pems_quality
+  WHERE TRUE {lane_filter}
+  GROUP BY station, year
+)
+SELECT 1 AS step, station, year FROM raw
+UNION ALL SELECT 2, station, year FROM days
+UNION ALL SELECT 3, station, year FROM days WHERE any_complete = 1
+UNION ALL SELECT 4, station, year FROM days WHERE any_full = 1
 """
 
 with sql.connect(
@@ -100,12 +132,38 @@ with sql.connect(
         station_years = pd.DataFrame(
             cur.fetchall(), columns=[d[0] for d in cur.description]
         )
+        cur.execute(funnel_query)
+        funnel_rows = pd.DataFrame(
+            cur.fetchall(), columns=[d[0] for d in cur.description]
+        )
 
 station_years["avg_daily_volume"] = station_years["avg_daily_volume"].astype(float)
+# Gold groups by station attributes too; fail loudly if a station ever has
+# two rows in one year (e.g. a lane_type change) rather than mis-pivoting.
+assert not station_years.duplicated(["station", "year"]).any(), "duplicate station-years in gold"
 
 if LANE_TYPES:
     station_years = station_years[station_years["lane_type"].isin(LANE_TYPES)]
     print(f"Lane types: {', '.join(LANE_TYPES)}")
+
+# %% Station counts per year at each data-quality step
+FUNNEL_STEPS = {
+    1: "Listed in PeMS metadata",
+    2: "Any usable data (samples > 0)",
+    3: "At least one complete day",
+    4: "At least one complete, 100% observed day",
+}
+per_year = funnel_rows.pivot_table(
+    index="step", columns="year", values="station", aggfunc="nunique"
+).reindex(columns=YEARS).fillna(0).astype(int)
+years_seen = funnel_rows.groupby(["step", "station"])["year"].nunique()
+station_counts = per_year.copy()
+station_counts.columns = [str(y) for y in YEARS]
+station_counts["Any year"] = years_seen.groupby("step").size()
+station_counts["All 4 years"] = (years_seen == len(YEARS)).groupby("step").sum()
+station_counts.index = station_counts.index.map(FUNNEL_STEPS)
+station_counts.index.name = "step"
+print(station_counts.to_string())
 
 # %% Keep stations present in all four years; pivot years to columns
 years_per_station = station_years.groupby("station")["year"].nunique()
@@ -116,13 +174,15 @@ volume = common_years.pivot(index="station", columns="year", values="avg_daily_v
 n_days = common_years.pivot(index="station", columns="year", values="n_days")
 attrs = common_years.groupby("station")[["freeway", "direction", "lane_type"]].first()
 
-print(f"Stations with >=1 passing day in any year: {years_per_station.size:,}")
+print(f"Stations in gold in any year: {years_per_station.size:,}")
 print(f"Stations common to {YEARS[0]}-{YEARS[-1]}: {len(common):,}")
 
 # %% Classify trend
 yoy_pct = volume[YEARS].pct_change(axis=1).iloc[:, 1:] * 100
 total_pct = (volume[YEARS[-1]] / volume[YEARS[0]] - 1) * 100
-trend = (total_pct < -DECLINE_PCT).map({True: "decreasing", False: "not decreasing"})
+trend = pd.Series("not decreasing", index=total_pct.index)
+trend[total_pct <= -SLIGHT_DECLINE_PCT] = "slightly decreasing"
+trend[total_pct < -DECLINE_PCT] = "decreasing"
 
 out = pd.DataFrame(index=volume.index)
 out[[str(y) for y in YEARS]] = volume[YEARS].round(0).astype(int)
@@ -143,8 +203,11 @@ meta = meta.rename(
 ).set_index("station")
 
 out = out.join(meta, how="left")
-missing_xy = out["lat"].isna().sum()
-print(f"Common stations missing coordinates: {missing_xy}")
+# PeMS leaves lat/lon blank for a few stations; they stay in the CSVs and
+# totals but can't be drawn.
+no_xy_ids = out.index[out["lat"].isna()].astype(str).tolist()
+missing_xy = len(no_xy_ids)
+print(f"Common stations missing coordinates: {missing_xy} {no_xy_ids}")
 
 out.index.name = "station"
 out.to_csv(CSV_PATH)
@@ -155,6 +218,7 @@ print(out["trend"].value_counts().to_string())
 year_cols = [str(y) for y in YEARS]
 by_lane = out.groupby("lane_type").agg(
     n_stations=("trend", "size"),
+    n_slightly_decreasing=("trend", lambda t: int((t == "slightly decreasing").sum())),
     n_decreasing=("trend", lambda t: int((t == "decreasing").sum())),
     **{y: (y, "sum") for y in year_cols},
 )
@@ -195,12 +259,12 @@ MAP_HTML = """<!doctype html>
 <style>
   :root {
     --surface: #fcfcfb; --ink: #1f1f1d; --ink-2: #5c5c58; --border: #e4e3df;
-    --up: #2a6fdb; --down: #d64535;
+    --up: #2a6fdb; --slight: #e9a90f; --down: #d64535;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --surface: #1a1a19; --ink: #ecebe8; --ink-2: #a6a5a0; --border: #383835;
-      --up: #5b9bff; --down: #ff6b5c;
+      --up: #5b9bff; --slight: #fab219; --down: #ff6b5c;
     }
   }
   html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink);
@@ -232,8 +296,9 @@ MAP_HTML = """<!doctype html>
   .totals th:first-child, .totals td:first-child { text-align: left; }
   .totals th { color: var(--ink-2); font-weight: 600; border-bottom: 1px solid var(--border); }
   .totals tr.total td { font-weight: 600; border-top: 1px solid var(--border); }
+  .totals td.common { font-weight: 600; }
   .totals .note { margin: 4px 0 0; }
-  #totalsTable { overflow-x: auto; }
+  #totalsTable, .tableWrap { overflow-x: auto; }
   @media (max-width: 600px) { .totals th, .totals td { padding-right: 8px; } }
   .leaflet-popup-content { font-size: 13px; }
   .leaflet-popup-content table { border-collapse: collapse; margin-top: 4px; }
@@ -244,14 +309,15 @@ MAP_HTML = """<!doctype html>
 <header>
   <h1>Where weekday traffic volumes are dropping, 2022&ndash;2025</h1>
   <p class="sub">__N__ PeMS District 11 stations (__LANES__) with fully observed,
-  complete Sep&ndash;Oct weekdays in all four years. Dot area = 2025 average daily
-  volume. Red = 2025 volume more than __DECLINE__% below 2022.</p>
+  complete Sep&ndash;Oct weekdays in all four years. Color compares 2025 with 2022.</p>
 </header>
 <div class="legend">
-  <span><span class="sw" style="background:var(--up)"></span>Within &minus;__DECLINE__% of 2022, or higher (<span id="nUp"></span>)</span>
-  <span><span class="sw" style="background:var(--down)"></span>Down more than __DECLINE__% vs. 2022 (<span id="nDown"></span>)</span>
+  <span><span class="sw" style="background:var(--up)"></span>Up, or down less than __SLIGHT__% (<span id="nUp"></span>)</span>
+  <span><span class="sw" style="background:var(--slight)"></span>Down __SLIGHT__&ndash;__DECLINE__% (<span id="nSlight"></span>)</span>
+  <span><span class="sw" style="background:var(--down)"></span>Down more than __DECLINE__% (<span id="nDown"></span>)</span>
   <span class="toggle">
     <label><input type="checkbox" id="showUp" checked> blue</label>
+    <label><input type="checkbox" id="showSlight" checked> yellow</label>
     <label><input type="checkbox" id="showDown" checked> red</label>
   </span>
 </div>
@@ -263,6 +329,13 @@ MAP_HTML = """<!doctype html>
   <button type="submit">Find</button>
   <span id="searchMsg" role="status"></span>
 </form>
+<details class="totals" open>
+  <summary>Station counts by year (__LANES__)</summary>
+  <div class="tableWrap">__STATION_COUNTS__</div>
+  <p class="note">Stations with Sep&ndash;Oct data at each step. Raw PeMS lists
+  every station even when it reports nothing. The map shows the
+  &ldquo;all 4 years&rdquo; stations of the last step that have coordinates.</p>
+</details>
 <details class="totals" id="totals">
   <summary>Totals per year by lane type (checked lane types)</summary>
   <div id="totalsTable"></div>
@@ -275,6 +348,13 @@ const DATA = __DATA__;
 const css = getComputedStyle(document.documentElement);
 const UP = css.getPropertyValue('--up').trim();
 const DOWN = css.getPropertyValue('--down').trim();
+const SLIGHT = css.getPropertyValue('--slight').trim();
+// trend -> [fill color, legend count id, toggle checkbox id]
+const CATS = {
+  'not decreasing': [UP, 'nUp', 'showUp'],
+  'slightly decreasing': [SLIGHT, 'nSlight', 'showSlight'],
+  'decreasing': [DOWN, 'nDown', 'showDown'],
+};
 const dark = matchMedia('(prefers-color-scheme: dark)').matches;
 
 const map = L.map('map', { preferCanvas: true });
@@ -296,7 +376,7 @@ const YEARS = __YEARS__;
 const shown = L.layerGroup().addTo(map);
 // Draw big dots first so small ones stay clickable on top.
 const markers = [...DATA].sort((a, b) => b.v2025 - a.v2025).map(d => {
-  const color = d.trend === 'decreasing' ? DOWN : UP;
+  const color = CATS[d.trend][0];
   const m = L.circleMarker([d.lat, d.lon], {
     radius: radius(d.v2025), color: dark ? '#1a1a19' : '#fcfcfb', weight: 1,
     fillColor: color, fillOpacity: 0.75,
@@ -327,39 +407,41 @@ Object.entries(laneCounts).sort((a, b) => b[1] - a[1]).forEach(([lane, n]) => {
 function redraw() {
   const lanes = new Set(
     [...laneBox.querySelectorAll('input:checked')].map(i => i.dataset.lane));
-  const showUp = document.getElementById('showUp').checked;
-  const showDown = document.getElementById('showDown').checked;
-  let nUp = 0, nDown = 0;
+  const counts = {};
   shown.clearLayers();
   markers.forEach(({ d, m }) => {
     if (!lanes.has(d.lane)) return;
-    const isDown = d.trend === 'decreasing';
-    isDown ? nDown++ : nUp++;   // counts reflect the lane filter, not the color toggles
-    if (isDown ? showDown : showUp) shown.addLayer(m);
+    // Counts reflect the lane filter, not the color toggles.
+    counts[d.trend] = (counts[d.trend] || 0) + 1;
+    if (document.getElementById(CATS[d.trend][2]).checked) shown.addLayer(m);
   });
-  document.getElementById('nUp').textContent = nUp.toLocaleString();
-  document.getElementById('nDown').textContent = nDown.toLocaleString();
+  Object.entries(CATS).forEach(([trend, [, countId]]) => {
+    document.getElementById(countId).textContent = (counts[trend] || 0).toLocaleString();
+  });
   renderTotals(lanes);
 }
 
 function renderTotals(lanes) {
   const rows = TOTALS.filter(t => lanes.has(t.lane_type))
     .sort((a, b) => b.n_stations - a.n_stations);
-  const sum = { lane_type: 'Total', n_stations: 0, n_decreasing: 0 };
+  const sum = { lane_type: 'Total', n_stations: 0, n_slightly_decreasing: 0, n_decreasing: 0 };
   YEARS.forEach(y => { sum[y] = 0; });
   rows.forEach(t => {
-    sum.n_stations += t.n_stations; sum.n_decreasing += t.n_decreasing;
+    sum.n_stations += t.n_stations;
+    sum.n_slightly_decreasing += t.n_slightly_decreasing;
+    sum.n_decreasing += t.n_decreasing;
     YEARS.forEach(y => { sum[y] += t[y]; });
   });
   const first = YEARS[0], last = YEARS[YEARS.length - 1];
   const change = t => t[first] ? pct((t[last] / t[first] - 1) * 100) : '';
   const row = (t, cls = '') => `<tr class="${cls}">
     <td>${t.lane_type === 'Total' ? 'Total' : `${LANE_NAMES[t.lane_type] ?? t.lane_type} (${t.lane_type})`}</td>
-    <td>${t.n_stations.toLocaleString()}</td><td>${t.n_decreasing.toLocaleString()}</td>
+    <td>${t.n_stations.toLocaleString()}</td>
+    <td>${t.n_slightly_decreasing.toLocaleString()}</td><td>${t.n_decreasing.toLocaleString()}</td>
     ${YEARS.map(y => `<td>${fmt(t[y])}</td>`).join('')}
     <td>${change(t)}</td></tr>`;
   document.getElementById('totalsTable').innerHTML = rows.length ? `<table>
-    <tr><th>Lane type</th><th>Stations</th><th>Red</th>
+    <tr><th>Lane type</th><th>Stations</th><th>Yellow</th><th>Red</th>
       ${YEARS.map(y => `<th>${y}</th>`).join('')}<th>${first}&rarr;${last}</th></tr>
     ${rows.map(t => row(t)).join('')}
     ${row(sum, 'total')}
@@ -405,20 +487,43 @@ new ResizeObserver(() => {
 </html>
 """
 
+# Static table: reflects the lane types of this run, not the map's checkboxes.
+header = "".join(f"<th>{c}</th>" for c in ["Step", *station_counts.columns])
+body = "".join(
+    "<tr><td>" + step + "</td>"
+    + "".join(
+        f'<td class="{"common" if c == "All 4 years" else ""}">{v:,}</td>'
+        for c, v in row.items()
+    )
+    + "</tr>"
+    for step, row in station_counts.iterrows()
+)
+station_counts_html = f"<table><tr>{header}</tr>{body}</table>"
+
 html = (
     MAP_HTML.replace("__DATA__", json.dumps(points.to_dict(orient="records")))
-    .replace("__N__", f"{len(points):,}")
+    .replace(
+        "__N__",
+        f"{len(out):,}" + (
+            f" ({len(points):,} drawn; "
+            + ("one station has" if missing_xy == 1 else f"{missing_xy} stations have")
+            + " no coordinates in PeMS)"
+            if missing_xy else ""
+        ),
+    )
     .replace("__LANES__", ", ".join(LANE_TYPES) if LANE_TYPES else "all lane types")
     .replace("__LANE_NAMES__", json.dumps(LANE_TYPE_NAMES))
     .replace("__DECLINE__", f"{DECLINE_PCT:g}")
+    .replace("__SLIGHT__", f"{SLIGHT_DECLINE_PCT:g}")
+    .replace("__STATION_COUNTS__", station_counts_html)
     .replace("__TOTALS__", by_lane.reset_index().to_json(orient="records"))
     .replace("__YEARS__", json.dumps(year_cols))
     .replace(
         "__TOTALS_NOTE__",
-        f" Includes {missing_xy} station(s) with no coordinates, not drawn on the map."
+        f" Includes {', '.join(no_xy_ids)}, which has no coordinates in PeMS and is not drawn."
         if missing_xy else "",
     )
 )
-MAP_PATH.parent.mkdir(exist_ok=True)
+MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
 MAP_PATH.write_text(html, encoding="utf-8")
 print(f"Wrote {MAP_PATH}")
