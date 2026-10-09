@@ -20,6 +20,9 @@
 # sample-weighted average daily volume over those days, so years with
 # more/fewer usable days stay comparable.
 # Common stations = stations with a gold row in every year.
+# The map has a time-period selector (daily, EA, AM, MD, PM, EV, from gold's
+# count_* columns): color, dot size, popups and totals follow the chosen
+# period. The CSVs stay daily.
 # The map also shows how many stations survive each data-quality step per
 # year (raw listing -> usable data -> complete days -> fully observed).
 #
@@ -50,6 +53,17 @@ SLIGHT_DECLINE_PCT = 0.1
 METADATA_VOLUME_PATH = (
     "/Volumes/travel_data/pems/raw_pems/station_metadata/d11_text_meta_2022_03_16.txt"
 )
+
+# Map key -> (gold column as queried, label). Periods follow the pipeline's
+# time-of-day split in transformations/02-silver_pems_station_days.py.
+PERIODS = {
+    "day": ("avg_daily_volume", "Daily"),
+    "ea": ("count_ea", "EA 3&ndash;6 AM"),
+    "am": ("count_am", "AM 6&ndash;9 AM"),
+    "md": ("count_md", "MD 9 AM&ndash;3:30 PM"),
+    "pm": ("count_pm", "PM 3:30&ndash;7 PM"),
+    "ev": ("count_ev", "EV 7 PM&ndash;3 AM"),
+}
 
 LANE_TYPE_NAMES = {
     "ML": "Mainline", "HV": "HOV", "OR": "On-ramp", "FR": "Off-ramp",
@@ -90,7 +104,8 @@ SELECT
   direction_of_travel AS direction,
   lane_type,
   number_of_weekdays AS n_days,
-  count_day AS avg_daily_volume
+  count_day AS avg_daily_volume,
+  count_ea, count_am, count_md, count_pm, count_ev
 FROM gold_pems_weekday_counts
 WHERE count_day IS NOT NULL
 """
@@ -137,7 +152,8 @@ with sql.connect(
             cur.fetchall(), columns=[d[0] for d in cur.description]
         )
 
-station_years["avg_daily_volume"] = station_years["avg_daily_volume"].astype(float)
+period_cols = [col for col, _ in PERIODS.values()]
+station_years[period_cols] = station_years[period_cols].astype(float)
 # Gold groups by station attributes too; fail loudly if a station ever has
 # two rows in one year (e.g. a lane_type change) rather than mis-pivoting.
 assert not station_years.duplicated(["station", "year"]).any(), "duplicate station-years in gold"
@@ -177,12 +193,23 @@ attrs = common_years.groupby("station")[["freeway", "direction", "lane_type"]].f
 print(f"Stations in gold in any year: {years_per_station.size:,}")
 print(f"Stations common to {YEARS[0]}-{YEARS[-1]}: {len(common):,}")
 
-# %% Classify trend
-yoy_pct = volume[YEARS].pct_change(axis=1).iloc[:, 1:] * 100
-total_pct = (volume[YEARS[-1]] / volume[YEARS[0]] - 1) * 100
-trend = pd.Series("not decreasing", index=total_pct.index)
-trend[total_pct <= -SLIGHT_DECLINE_PCT] = "slightly decreasing"
-trend[total_pct < -DECLINE_PCT] = "decreasing"
+# %% Classify trend (daily for the CSVs; every period for the map)
+def classify(vol):
+    yoy = vol[YEARS].pct_change(axis=1).iloc[:, 1:] * 100
+    total = (vol[YEARS[-1]] / vol[YEARS[0]] - 1) * 100
+    trend = pd.Series("not decreasing", index=total.index)
+    trend[total <= -SLIGHT_DECLINE_PCT] = "slightly decreasing"
+    trend[total < -DECLINE_PCT] = "decreasing"
+    return yoy, total, trend
+
+
+by_period = {}
+for key, (col, _) in PERIODS.items():
+    vol = common_years.pivot(index="station", columns="year", values=col)[YEARS]
+    assert vol.notna().all().all(), f"missing {col} values in gold"
+    by_period[key] = (vol, *classify(vol))
+
+yoy_pct, total_pct, trend = by_period["day"][1:]
 
 out = pd.DataFrame(index=volume.index)
 out[[str(y) for y in YEARS]] = volume[YEARS].round(0).astype(int)
@@ -216,12 +243,22 @@ print(out["trend"].value_counts().to_string())
 
 # %% Totals per year by lane type (sum of station average daily volumes)
 year_cols = [str(y) for y in YEARS]
-by_lane = out.groupby("lane_type").agg(
-    n_stations=("trend", "size"),
-    n_slightly_decreasing=("trend", lambda t: int((t == "slightly decreasing").sum())),
-    n_decreasing=("trend", lambda t: int((t == "decreasing").sum())),
-    **{y: (y, "sum") for y in year_cols},
-)
+
+
+def lane_totals(key):
+    vol, _, _, period_trend = by_period[key]
+    frame = vol.round(0).set_axis(year_cols, axis=1)
+    frame["trend"] = period_trend
+    frame["lane_type"] = out["lane_type"]
+    return frame.groupby("lane_type").agg(
+        n_stations=("trend", "size"),
+        n_slightly_decreasing=("trend", lambda t: int((t == "slightly decreasing").sum())),
+        n_decreasing=("trend", lambda t: int((t == "decreasing").sum())),
+        **{y: (y, "sum") for y in year_cols},
+    )
+
+
+by_lane = lane_totals("day")
 totals = pd.concat([by_lane, by_lane.sum().to_frame("Total").T])
 totals.index.name = "lane_type"
 totals[f"pct_change_{YEARS[0]}_{YEARS[-1]}"] = (
@@ -246,6 +283,19 @@ points = (
 points.columns = [
     "station", "name", "fwy", "dir", "lane", "lat", "lon",
     "v2022", "v2023", "v2024", "v2025", "c1", "c2", "c3", "ctotal", "trend",
+]
+points = points[["station", "name", "fwy", "dir", "lane", "lat", "lon"]].copy()
+# p[period] = {v: [volume per year], c: [yoy changes..., first->last], t: trend}
+points["p"] = [
+    {
+        key: {
+            "v": [round(float(vol.at[st, y])) for y in YEARS],
+            "c": [round(float(c), 1) for c in yoy.loc[st]] + [round(float(tot.at[st]), 1)],
+            "t": tr.at[st],
+        }
+        for key, (vol, yoy, tot, tr) in by_period.items()
+    }
+    for st in points["station"]
 ]
 
 MAP_HTML = """<!doctype html>
@@ -279,8 +329,8 @@ MAP_HTML = """<!doctype html>
   .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
     vertical-align: -1px; margin-right: 6px; }
   .toggle { display: flex; gap: 12px; margin-left: auto; }
-  .toggle label, #laneFilter label { cursor: pointer; }
-  #laneFilter { padding-top: 0; gap: 12px; }
+  .toggle label, #laneFilter label, #periodFilter label { cursor: pointer; }
+  #laneFilter, #periodFilter { padding-top: 0; gap: 12px; }
   .search { display: flex; gap: 8px; align-items: center; }
   .search input { font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 9em; }
@@ -309,7 +359,8 @@ MAP_HTML = """<!doctype html>
 <header>
   <h1>Where weekday traffic volumes are dropping, 2022&ndash;2025</h1>
   <p class="sub">__N__ PeMS District 11 stations (__LANES__) with fully observed,
-  complete Sep&ndash;Oct weekdays in all four years. Color compares 2025 with 2022.</p>
+  complete Sep&ndash;Oct weekdays in all four years.  Color compares 2025 with 2022,
+  and dot size shows 2025 average daily weekday volume, both for the selected time period.</p>
 </header>
 <div class="legend">
   <span><span class="sw" style="background:var(--up)"></span>Up, or down less than __SLIGHT__% (<span id="nUp"></span>)</span>
@@ -321,6 +372,7 @@ MAP_HTML = """<!doctype html>
     <label><input type="checkbox" id="showDown" checked> red</label>
   </span>
 </div>
+<div class="legend" id="periodFilter"><span>Time period:</span></div>
 <div class="legend" id="laneFilter"><span>Lane type:</span></div>
 <form class="legend search" id="search" autocomplete="off">
   <label for="searchInput">Station ID</label>
@@ -337,9 +389,9 @@ MAP_HTML = """<!doctype html>
   &ldquo;all 4 years&rdquo; stations of the last step that have coordinates.</p>
 </details>
 <details class="totals" id="totals">
-  <summary>Totals per year by lane type (checked lane types)</summary>
+  <summary>Totals per year by lane type (<span id="totalsPeriod"></span>, checked lane types)</summary>
   <div id="totalsTable"></div>
-  <p class="note">Sum of the stations' average weekday daily volumes. It's an
+  <p class="note">Sum of the stations' average weekday volumes in the period. It's an
   index for comparing years, not a count of trips or vehicles.__TOTALS_NOTE__</p>
 </details>
 <div id="map"></div>
@@ -365,8 +417,14 @@ L.tileLayer(
   { attribution: 'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors', maxZoom: 16 }
 ).addTo(map);
 
-const maxV = Math.max(...DATA.map(d => d.v2025));
-const radius = v => 2 + 12 * Math.sqrt(v / maxV);   // area ~ volume
+const PERIODS = __PERIODS__;   // key -> label
+let period = 'day';
+const v25 = d => d.p[period].v[3];
+// Dot area ~ volume, scaled to the period's largest station so short
+// periods stay visible; sizes compare stations within a period, not across.
+const maxV = {};
+Object.keys(PERIODS).forEach(k => { maxV[k] = Math.max(...DATA.map(d => d.p[k].v[3])); });
+const radius = v => 2 + 12 * Math.sqrt(v / maxV[period]);
 const fmt = v => Math.round(v).toLocaleString();
 const pct = c => (c > 0 ? '+' : '') + c.toFixed(1) + '%';
 
@@ -374,24 +432,48 @@ const LANE_NAMES = __LANE_NAMES__;
 const TOTALS = __TOTALS__;   // by lane type, from every common station
 const YEARS = __YEARS__;
 const shown = L.layerGroup().addTo(map);
-// Draw big dots first so small ones stay clickable on top.
-const markers = [...DATA].sort((a, b) => b.v2025 - a.v2025).map(d => {
-  const color = CATS[d.trend][0];
-  const m = L.circleMarker([d.lat, d.lon], {
-    radius: radius(d.v2025), color: dark ? '#1a1a19' : '#fcfcfb', weight: 1,
-    fillColor: color, fillOpacity: 0.75,
-  }).bindPopup(
-    `<b>${d.station}</b> &middot; ${d.fwy}${d.dir} ${d.lane}<br>${d.name ?? ''}
+function popup(d) {
+  const { v, c } = d.p[period];
+  return `<b>${d.station}</b> &middot; ${d.fwy}${d.dir} ${d.lane}<br>${d.name ?? ''}
+     <br><span style="color:var(--ink-2)">${PERIODS[period]}</span>
      <table>
-       <tr><td>2022</td><td>${fmt(d.v2022)}</td><td></td></tr>
-       <tr><td>2023</td><td>${fmt(d.v2023)}</td><td>${pct(d.c1)}</td></tr>
-       <tr><td>2024</td><td>${fmt(d.v2024)}</td><td>${pct(d.c2)}</td></tr>
-       <tr><td>2025</td><td>${fmt(d.v2025)}</td><td>${pct(d.c3)}</td></tr>
-       <tr><td colspan="2"><b>2022&rarr;2025</b></td><td><b>${pct(d.ctotal)}</b></td></tr>
-     </table>`
-  ).bindTooltip(`${d.station}: ${fmt(d.v2025)} veh/day (2025)`);
+       ${YEARS.map((y, i) => `<tr><td>${y}</td><td>${fmt(v[i])}</td>
+         <td>${i ? pct(c[i - 1]) : ''}</td></tr>`).join('')}
+       <tr><td colspan="2"><b>${YEARS[0]}&rarr;${YEARS[YEARS.length - 1]}</b></td>
+         <td><b>${pct(c[c.length - 1])}</b></td></tr>
+     </table>`;
+}
+const markers = DATA.map(d => {
+  const m = L.circleMarker([d.lat, d.lon], {
+    color: dark ? '#1a1a19' : '#fcfcfb', weight: 1, fillOpacity: 0.75,
+  }).bindPopup(() => popup(d))
+    .bindTooltip(() => `${d.station}: ${fmt(v25(d))} vehicles (2025, ${PERIODS[period]})`);
   return { d, m };
 });
+function restyle() {
+  markers.forEach(({ d, m }) => {
+    m.setRadius(radius(v25(d)));
+    m.setStyle({ fillColor: CATS[d.p[period].t][0] });
+  });
+  // Draw big dots first so small ones stay clickable on top.
+  markers.sort((a, b) => v25(b.d) - v25(a.d));
+}
+
+// Time-period radio buttons.
+const periodBox = document.getElementById('periodFilter');
+Object.entries(PERIODS).forEach(([key, label]) => {
+  const el = document.createElement('label');
+  el.innerHTML = `<input type="radio" name="period" value="${key}"`
+    + `${key === period ? ' checked' : ''}> ${label}`;
+  periodBox.appendChild(el);
+});
+periodBox.querySelectorAll('input').forEach(i => i.onchange = () => {
+  period = i.value;
+  map.closePopup();
+  restyle();
+  redraw();
+});
+restyle();
 
 // Lane-type checkboxes, most common type first.
 const laneCounts = {};
@@ -412,8 +494,9 @@ function redraw() {
   markers.forEach(({ d, m }) => {
     if (!lanes.has(d.lane)) return;
     // Counts reflect the lane filter, not the color toggles.
-    counts[d.trend] = (counts[d.trend] || 0) + 1;
-    if (document.getElementById(CATS[d.trend][2]).checked) shown.addLayer(m);
+    const t = d.p[period].t;
+    counts[t] = (counts[t] || 0) + 1;
+    if (document.getElementById(CATS[t][2]).checked) shown.addLayer(m);
   });
   Object.entries(CATS).forEach(([trend, [, countId]]) => {
     document.getElementById(countId).textContent = (counts[trend] || 0).toLocaleString();
@@ -422,7 +505,8 @@ function redraw() {
 }
 
 function renderTotals(lanes) {
-  const rows = TOTALS.filter(t => lanes.has(t.lane_type))
+  document.getElementById('totalsPeriod').innerHTML = PERIODS[period];
+  const rows = TOTALS[period].filter(t => lanes.has(t.lane_type))
     .sort((a, b) => b.n_stations - a.n_stations);
   const sum = { lane_type: 'Total', n_stations: 0, n_slightly_decreasing: 0, n_decreasing: 0 };
   YEARS.forEach(y => { sum[y] = 0; });
@@ -516,7 +600,11 @@ html = (
     .replace("__DECLINE__", f"{DECLINE_PCT:g}")
     .replace("__SLIGHT__", f"{SLIGHT_DECLINE_PCT:g}")
     .replace("__STATION_COUNTS__", station_counts_html)
-    .replace("__TOTALS__", by_lane.reset_index().to_json(orient="records"))
+    .replace("__TOTALS__", json.dumps({
+        key: json.loads(lane_totals(key).reset_index().to_json(orient="records"))
+        for key in PERIODS
+    }))
+    .replace("__PERIODS__", json.dumps({key: label for key, (_, label) in PERIODS.items()}))
     .replace("__YEARS__", json.dumps(year_cols))
     .replace(
         "__TOTALS_NOTE__",
