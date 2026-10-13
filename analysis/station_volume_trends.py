@@ -1,8 +1,8 @@
 # %% [markdown]
 # Year-over-year daily volume trend for stations common to 2022-2025.
 # Run cell by cell (VS Code: "Run Cell" above each `# %%`), or end to end:
-#   uv run python analysis/station_volume_trends.py
-#   uv run python analysis/station_volume_trends.py --lane-types ML,HV
+#   uv run --env-file .env python analysis/station_volume_trends.py
+#   uv run --env-file .env python analysis/station_volume_trends.py --lane-types ML,HV
 # Read-only against Databricks; writes CSVs under analysis/ and the HTML map to
 # docs/station_volume_trends/index.html, which GitHub Pages publishes at
 # https://sandag.github.io/PeMS-Pipeline/station_volume_trends/
@@ -91,9 +91,12 @@ catalog = os.environ.get("PEMS_CATALOG", "sandbox")
 schema = os.environ.get("PEMS_SCHEMA")
 if schema is None:
     schema = WorkspaceClient(config=cfg).current_user.me().user_name.split("@")[0]
-http_path = os.environ.get(
-    "DATABRICKS_HTTP_PATH", "/sql/1.0/warehouses/bebb2aea2c14f69c"
-)
+http_path = os.environ.get("DATABRICKS_HTTP_PATH")
+if not http_path:
+    raise RuntimeError(
+        "Set DATABRICKS_HTTP_PATH to your SQL warehouse HTTP path "
+        "(Databricks > SQL Warehouses > Connection details)"
+    )
 
 # %% Average daily volume by station and year, from gold
 query = """

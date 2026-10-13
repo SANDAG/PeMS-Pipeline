@@ -21,11 +21,12 @@ and `bronze_raw_pems` for raw 5-min records.
 
 The report queries `silver_pems_quality` directly from Databricks via a SQL
 warehouse (see the first code cell in `index.qmd`), authenticating with the
-`dev` Databricks CLI profile by default. Override with these env vars if
-needed:
+`dev` Databricks CLI profile by default. Settings come from these env vars,
+which can live in a `.env` file at the repo root (git-ignored; see step 2):
 
 - `DATABRICKS_CONFIG_PROFILE` (default `dev`)
-- `DATABRICKS_HTTP_PATH` (default: the workspace's serverless starter warehouse)
+- `DATABRICKS_HTTP_PATH` (**required**, no default): your SQL warehouse HTTP path,
+  from Databricks > SQL Warehouses > Connection details
 - `PEMS_CATALOG` (default `sandbox`)
 - `PEMS_SCHEMA` (default: your own username, matching the `sandbox.<short_name>`
   dev bundle target; set to `pems` once deployed under `travel_data`)
@@ -63,19 +64,27 @@ This registers the `pems-quarto` Jupyter kernel this report uses (see the
 comment at the top of that script for why it needs its own kernel, separate
 from the default one).
 
+Then create a `.env` file in the repository root (it is git-ignored) with
+your SQL warehouse HTTP path, from Databricks > SQL Warehouses > Connection
+details:
+```
+DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/<warehouse id>
+```
+
 **3. Render the report:**
 ```bash
-uv run quarto render reports/pems_quality
+uv run --env-file .env quarto render reports/pems_quality
 ```
 This is the step where the SQL files under `sql/` actually get read and
 executed against your warehouse — there's no separate command for them.
 
 If `silver_pems_quality` lives somewhere other than
 `sandbox.<your username>` (e.g. it's been deployed to `travel_data`/`pems`),
-override with these env vars instead of step 1:
+override with these env vars (e.g. in `.env`) instead of step 1:
 
 - `DATABRICKS_CONFIG_PROFILE` (default `dev`)
-- `DATABRICKS_HTTP_PATH` (default: the workspace's serverless starter warehouse)
+- `DATABRICKS_HTTP_PATH` (**required**, no default): your SQL warehouse HTTP path,
+  from Databricks > SQL Warehouses > Connection details
 - `PEMS_CATALOG` (default `sandbox`)
 - `PEMS_SCHEMA` (default: your own username, matching the `sandbox.<short_name>`
   dev bundle target; set to `pems` once deployed under `travel_data`)
@@ -89,7 +98,7 @@ re-rendering normally will silently keep showing old cached results.
 The reliable fix is to clear the freeze cache before rendering:
 ```powershell
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue reports/pems_quality/_freeze, reports/pems_quality/.quarto/_freeze
-uv run quarto render reports/pems_quality
+uv run --env-file .env quarto render reports/pems_quality
 ```
 Do this any time you change a `.sql` file and want to confirm the report
 actually reflects it.

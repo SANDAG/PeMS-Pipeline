@@ -41,10 +41,12 @@ if schema is None:
     # convention used by the "dev" bundle target in databricks.yml).
     schema = WorkspaceClient(config=cfg).current_user.me().user_name.split("@")[0]
 
-http_path = os.environ.get(
-    "DATABRICKS_HTTP_PATH", "/sql/1.0/warehouses/bebb2aea2c14f69c" 
-    # this is the workspace ID, no need to change for another user
-)
+http_path = os.environ.get("DATABRICKS_HTTP_PATH")
+if not http_path:
+    raise RuntimeError(
+        "Set DATABRICKS_HTTP_PATH to your SQL warehouse HTTP path "
+        "(Databricks > SQL Warehouses > Connection details)"
+    )
 
 sql_dir = Path("sql")
 
