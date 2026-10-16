@@ -193,6 +193,33 @@ Unauthorized network access to workspace
 connect to the required corporate network/VPN and retry. This is a
 workspace/network-access problem, not a Python pipeline error.
 
+### Check and refresh login profiles
+
+The bundle, the Quarto report, and the analysis scripts use the `dev`
+profile by default. List your profiles and whether each login is still
+valid:
+
+``` powershell
+databricks auth profiles
+```
+
+``` text
+Name             Host                                                 Valid
+dev (Default)    https://<YOUR-DATABRICKS-WORKSPACE-HOST>             NO
+```
+
+If `dev` shows `NO`, its login has expired (for example, "the refresh
+token is invalid"). Log in again to that profile specifically:
+
+``` powershell
+databricks auth login --profile dev
+```
+
+Plain `databricks auth login` may refresh a different profile for the
+same workspace (such as one named after your email), leaving `dev`
+expired. `Valid` can also show `NO` for every profile while the network
+block above is active; reconnect the VPN and check again.
+
 ------------------------------------------------------------------------
 
 ## 6. Validate the Bundle

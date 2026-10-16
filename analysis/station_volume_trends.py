@@ -58,11 +58,11 @@ METADATA_VOLUME_PATH = (
 # time-of-day split in transformations/02-silver_pems_station_days.py.
 PERIODS = {
     "day": ("avg_daily_volume", "Daily"),
-    "ea": ("count_ea", "EA 3&ndash;6 AM"),
-    "am": ("count_am", "AM 6&ndash;9 AM"),
-    "md": ("count_md", "MD 9 AM&ndash;3:30 PM"),
-    "pm": ("count_pm", "PM 3:30&ndash;7 PM"),
-    "ev": ("count_ev", "EV 7 PM&ndash;3 AM"),
+    "ea": ("count_ea", "EA 3-6 AM"),
+    "am": ("count_am", "AM 6-9 AM"),
+    "md": ("count_md", "MD 9 AM-3:30 PM"),
+    "pm": ("count_pm", "PM 3:30-7 PM"),
+    "ev": ("count_ev", "EV 7 PM-3 AM"),
 }
 
 LANE_TYPE_NAMES = {
@@ -263,6 +263,7 @@ def lane_totals(key):
 
 by_lane = lane_totals("day")
 totals = pd.concat([by_lane, by_lane.sum().to_frame("Total").T])
+totals = totals.astype(int)   # counts and rounded volumes; pct added below
 totals.index.name = "lane_type"
 totals[f"pct_change_{YEARS[0]}_{YEARS[-1]}"] = (
     (totals[year_cols[-1]] / totals[year_cols[0]] - 1) * 100
@@ -322,8 +323,10 @@ MAP_HTML = """<!doctype html>
   }
   html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink);
     font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body { display: flex; flex-direction: column; }
-  body > :not(#map) { flex-shrink: 0; }   /* the map takes what is left */
+  /* Wide screens: controls and tables scroll in a left panel, the map fills
+     the right. Narrow screens: panel above, map below. */
+  body { display: grid; grid-template-columns: minmax(400px, 44%) 1fr; height: 100vh; }
+  #panel { overflow-y: auto; border-right: 1px solid var(--border); padding-bottom: 12px; }
   header { padding: 12px 16px 8px; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   p.sub { margin: 0; color: var(--ink-2); font-size: 13px; }
@@ -331,16 +334,22 @@ MAP_HTML = """<!doctype html>
     font-size: 13px; color: var(--ink-2); align-items: center; }
   .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
     vertical-align: -1px; margin-right: 6px; }
-  .toggle { display: flex; gap: 12px; margin-left: auto; }
+  .toggle { display: flex; gap: 12px; flex-basis: 100%; }   /* own row, left-aligned */
   .toggle label, #laneFilter label, #periodFilter label { cursor: pointer; }
   #laneFilter, #periodFilter { padding-top: 0; gap: 12px; }
+  #laneFilter > span:first-child, #periodFilter > span:first-child { font-weight: 600; color: var(--ink); }
   .search { display: flex; gap: 8px; align-items: center; }
   .search input { font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 9em; }
   .search button { font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
   #searchMsg { color: var(--ink-2); }
-  #map { flex: 1; min-height: 300px; }
+  #map { height: 100vh; }
+  @media (max-width: 900px) {
+    body { display: block; height: auto; }
+    #panel { overflow: visible; border-right: 0; }
+    #map { height: 75vh; min-height: 360px; }
+  }
   details.totals { padding: 0 16px 10px; font-size: 13px; color: var(--ink-2); }
   details.totals summary { cursor: pointer; }
   .totals table { border-collapse: collapse; margin-top: 6px; color: var(--ink);
@@ -359,10 +368,11 @@ MAP_HTML = """<!doctype html>
 </style>
 </head>
 <body>
+<div id="panel">
 <header>
-  <h1>Where weekday traffic volumes are dropping, 2022&ndash;2025</h1>
+  <h1>Where weekday traffic volumes are dropping, 2022-2025</h1>
   <p class="sub">__N__ PeMS District 11 stations (__LANES__) with fully observed,
-  complete Sep&ndash;Oct weekdays in all four years.  Color compares 2025 with 2022,
+  complete Sep-Oct weekdays in all four years.  Color compares 2025 with 2022,
   and dot size shows 2025 average daily weekday volume, both for the selected time period.</p>
 </header>
 <div class="legend">
@@ -387,16 +397,16 @@ MAP_HTML = """<!doctype html>
 <details class="totals" open>
   <summary>Station counts by year (__LANES__)</summary>
   <div class="tableWrap">__STATION_COUNTS__</div>
-  <p class="note">Stations with Sep&ndash;Oct data at each step. Raw PeMS lists
+  <p class="note">Stations with Sep-Oct data at each step. Raw PeMS lists
   every station even when it reports nothing. The map shows the
   &ldquo;all 4 years&rdquo; stations of the last step that have coordinates.</p>
 </details>
 <details class="totals" id="totals">
   <summary>Totals per year by lane type (<span id="totalsPeriod"></span>, checked lane types)</summary>
   <div id="totalsTable"></div>
-  <p class="note">Sum of the stations' average weekday volumes in the period. It's an
-  index for comparing years, not a count of trips or vehicles.__TOTALS_NOTE__</p>
+  <p class="note">Sum of the stations' average weekday volumes in the period. __TOTALS_NOTE__</p>
 </details>
+</div>
 <div id="map"></div>
 <script>
 const DATA = __DATA__;
@@ -592,9 +602,7 @@ html = (
     .replace(
         "__N__",
         f"{len(out):,}" + (
-            f" ({len(points):,} drawn; "
-            + ("one station has" if missing_xy == 1 else f"{missing_xy} stations have")
-            + " no coordinates in PeMS)"
+            f" ({len(points):,} drawn)"
             if missing_xy else ""
         ),
     )
