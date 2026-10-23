@@ -31,6 +31,14 @@
 #   -DECLINE_PCT <= pct <= -SLIGHT_DECLINE  -> "slightly decreasing" (yellow)
 #   pct > -SLIGHT_DECLINE_PCT               -> "not decreasing"    (blue)
 # Year-over-year changes are kept in the CSV and map popups for context.
+#
+# Speed: gold's speed_* columns (same station-day filters; flow-weighted per
+# day, sample-weighted across days). The map's "Color by" switch recolors the
+# dots by a selected year's average speed (< CONGESTED_MPH red, < FREE_FLOW_MPH
+# yellow, else blue) while the volume-trend checkboxes still filter stations,
+# so e.g. only the red (decreasing volume) stations can be checked for low,
+# possibly congested speeds. Popups always show both volume and speed.
+# Stations whose detectors report no speed are drawn gray in speed mode.
 
 # %%
 import argparse
@@ -50,6 +58,8 @@ logging.getLogger("databricks.sql").setLevel(logging.ERROR)
 YEARS = [2022, 2023, 2024, 2025]
 DECLINE_PCT = 5.0
 SLIGHT_DECLINE_PCT = 0.1
+CONGESTED_MPH = 35
+FREE_FLOW_MPH = 60
 METADATA_VOLUME_PATH = (
     "/Volumes/travel_data/pems/raw_pems/station_metadata/d11_text_meta_2022_03_16.txt"
 )
@@ -64,6 +74,9 @@ PERIODS = {
     "pm": ("count_pm", "PM 3:30-7 PM"),
     "ev": ("count_ev", "EV 7 PM-3 AM"),
 }
+
+# Map key -> gold speed column, same periods as PERIODS.
+SPEED_COLS = {key: f"speed_{key}" for key in PERIODS}
 
 LANE_TYPE_NAMES = {
     "ML": "Mainline", "HV": "HOV", "OR": "On-ramp", "FR": "Off-ramp",
@@ -108,7 +121,8 @@ SELECT
   lane_type,
   number_of_weekdays AS n_days,
   count_day AS avg_daily_volume,
-  count_ea, count_am, count_md, count_pm, count_ev
+  count_ea, count_am, count_md, count_pm, count_ev,
+  speed_day, speed_ea, speed_am, speed_md, speed_pm, speed_ev
 FROM gold_pems_weekday_counts
 WHERE count_day IS NOT NULL
 """
@@ -157,6 +171,8 @@ with sql.connect(
 
 period_cols = [col for col, _ in PERIODS.values()]
 station_years[period_cols] = station_years[period_cols].astype(float)
+speed_cols = list(SPEED_COLS.values())
+station_years[speed_cols] = station_years[speed_cols].astype(float)
 # Gold groups by station attributes too; fail loudly if a station ever has
 # two rows in one year (e.g. a lane_type change) rather than mis-pivoting.
 assert not station_years.duplicated(["station", "year"]).any(), "duplicate station-years in gold"
@@ -214,12 +230,20 @@ for key, (col, _) in PERIODS.items():
 
 yoy_pct, total_pct, trend = by_period["day"][1:]
 
+# Speeds may be missing (detectors without speed); left as NaN.
+speed_by_period = {
+    key: common_years.pivot(index="station", columns="year", values=col)
+    .reindex(columns=YEARS)
+    for key, col in SPEED_COLS.items()
+}
+
 out = pd.DataFrame(index=volume.index)
 out[[str(y) for y in YEARS]] = volume[YEARS].round(0).astype(int)
 out[[f"n_days_{y}" for y in YEARS]] = n_days[YEARS].astype(int)
 out[[f"pct_change_{a}_{b}" for a, b in zip(YEARS, YEARS[1:])]] = yoy_pct.round(1).values
 out[f"pct_change_{YEARS[0]}_{YEARS[-1]}"] = total_pct.round(1)
 out["trend"] = trend
+out[[f"speed_{y}" for y in YEARS]] = speed_by_period["day"].round(1).values
 out = attrs.join(out)
 
 # %% Station coordinates from PeMS station metadata
@@ -289,13 +313,18 @@ points.columns = [
     "v2022", "v2023", "v2024", "v2025", "c1", "c2", "c3", "ctotal", "trend",
 ]
 points = points[["station", "name", "fwy", "dir", "lane", "lat", "lon"]].copy()
-# p[period] = {v: [volume per year], c: [yoy changes..., first->last], t: trend}
+# p[period] = {v: [volume per year], c: [yoy changes..., first->last], t: trend,
+#              s: [speed per year, null when missing]}
 points["p"] = [
     {
         key: {
             "v": [round(float(vol.at[st, y])) for y in YEARS],
             "c": [round(float(c), 1) for c in yoy.loc[st]] + [round(float(tot.at[st]), 1)],
             "t": tr.at[st],
+            "s": [
+                None if pd.isna(sp) else round(float(sp), 1)
+                for sp in speed_by_period[key].loc[st, YEARS]
+            ],
         }
         for key, (vol, yoy, tot, tr) in by_period.items()
     }
@@ -313,12 +342,12 @@ MAP_HTML = """<!doctype html>
 <style>
   :root {
     --surface: #fcfcfb; --ink: #1f1f1d; --ink-2: #5c5c58; --border: #e4e3df;
-    --up: #2a6fdb; --slight: #e9a90f; --down: #d64535;
+    --up: #2a6fdb; --slight: #e9a90f; --down: #d64535; --none: #b4b3ae;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --surface: #1a1a19; --ink: #ecebe8; --ink-2: #a6a5a0; --border: #383835;
-      --up: #5b9bff; --slight: #fab219; --down: #ff6b5c;
+      --up: #5b9bff; --slight: #fab219; --down: #ff6b5c; --none: #5c5c58;
     }
   }
   html, body { margin: 0; height: 100%; background: var(--surface); color: var(--ink);
@@ -336,8 +365,13 @@ MAP_HTML = """<!doctype html>
     vertical-align: -1px; margin-right: 6px; }
   .toggle { display: flex; gap: 12px; flex-basis: 100%; }   /* own row, left-aligned */
   .toggle label, #laneFilter label, #periodFilter label { cursor: pointer; }
-  #laneFilter, #periodFilter { padding-top: 0; gap: 12px; }
-  #laneFilter > span:first-child, #periodFilter > span:first-child { font-weight: 600; color: var(--ink); }
+  #laneFilter, #periodFilter, #modeFilter, #yearFilter { padding-top: 0; gap: 12px; }
+  #laneFilter > span:first-child, #periodFilter > span:first-child,
+  .legend > span.hd { font-weight: 600; color: var(--ink); }
+  .legend label { cursor: pointer; }
+  [hidden] { display: none !important; }
+  /* Speed mode: trend rows are filters only; their swatches would clash. */
+  body.speed #trendLegend .sw { display: none; }
   .search { display: flex; gap: 8px; align-items: center; }
   .search input { font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 9em; }
@@ -372,10 +406,22 @@ MAP_HTML = """<!doctype html>
 <header>
   <h1>Where weekday traffic volumes are dropping, 2022-2025</h1>
   <p class="sub">__N__ PeMS District 11 stations (__LANES__) with fully observed,
-  complete Sep-Oct weekdays in all four years.  Color compares 2025 with 2022,
-  and dot size shows 2025 average daily weekday volume, both for the selected time period.</p>
+  complete Sep-Oct weekdays in all four years. Color compares 2025 with 2022
+  volume, or shows a year's average speed; dot size shows 2025 average daily
+  weekday volume, all for the selected time period.</p>
 </header>
-<div class="legend">
+<div class="legend" id="modeFilter"><span class="hd">Color by:</span>
+  <label><input type="radio" name="mode" value="volume" checked> Volume trend</label>
+  <label><input type="radio" name="mode" value="speed"> Average speed</label>
+</div>
+<div class="legend" id="yearFilter" hidden><span class="hd">Speed year:</span></div>
+<div class="legend" id="speedLegend" hidden>
+  <span><span class="sw" style="background:var(--down)"></span>Under __SLOW__ mph (<span id="nSlow"></span>)</span>
+  <span><span class="sw" style="background:var(--slight)"></span>__SLOW__&ndash;__FAST__ mph (<span id="nMid"></span>)</span>
+  <span><span class="sw" style="background:var(--up)"></span>__FAST__ mph or more (<span id="nFast"></span>)</span>
+  <span><span class="sw" style="background:var(--none)"></span>No speed data (<span id="nNone"></span>)</span>
+</div>
+<div class="legend" id="trendLegend"><span class="hd" id="trendHd" hidden>Show stations with volume trend:</span>
   <span><span class="sw" style="background:var(--up)"></span>Up, or down less than __SLIGHT__% (<span id="nUp"></span>)</span>
   <span><span class="sw" style="background:var(--slight)"></span>Down __SLIGHT__&ndash;__DECLINE__% (<span id="nSlight"></span>)</span>
   <span><span class="sw" style="background:var(--down)"></span>Down more than __DECLINE__% (<span id="nDown"></span>)</span>
@@ -401,6 +447,13 @@ MAP_HTML = """<!doctype html>
   every station even when it reports nothing. The map shows the
   &ldquo;all 4 years&rdquo; stations of the last step that have coordinates.</p>
 </details>
+<details class="totals" open>
+  <summary>Volume-weighted average speed (<span id="speedPeriod"></span>, stations on the map)</summary>
+  <div class="tableWrap" id="speedTable"></div>
+  <p class="note">Sum of volume &times; speed over sum of volume (mph), each
+  year with that year's volume, for stations with speed data (mainline and HOV)
+  that pass the lane-type and volume-trend checkboxes.</p>
+</details>
 <details class="totals" id="totals">
   <summary>Totals per year by lane type (<span id="totalsPeriod"></span>, checked lane types)</summary>
   <div id="totalsTable"></div>
@@ -421,6 +474,13 @@ const CATS = {
   'decreasing': [DOWN, 'nDown', 'showDown'],
 };
 const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+const NONE = css.getPropertyValue('--none').trim();
+const SLOW = __SLOW__, FAST = __FAST__;
+// speed bin -> [fill color, legend count id]
+const SPEED_BINS = {
+  slow: [DOWN, 'nSlow'], mid: [SLIGHT, 'nMid'], fast: [UP, 'nFast'], none: [NONE, 'nNone'],
+};
+const speedBin = s => s == null ? 'none' : s < SLOW ? 'slow' : s < FAST ? 'mid' : 'fast';
 
 const map = L.map('map', { preferCanvas: true });
 // Esri gray canvas basemaps need no API key.
@@ -432,7 +492,11 @@ L.tileLayer(
 
 const PERIODS = __PERIODS__;   // key -> label
 let period = 'day';
+let mode = 'volume';
+let yi = 3;   // speed year index
 const v25 = d => d.p[period].v[3];
+const sp = d => d.p[period].s[yi];
+const mph = s => s == null ? '&ndash;' : s.toFixed(1);
 // Dot area ~ volume, scaled to the period's largest station so short
 // periods stay visible; sizes compare stations within a period, not across.
 const maxV = {};
@@ -446,27 +510,31 @@ const TOTALS = __TOTALS__;   // by lane type, from every common station
 const YEARS = __YEARS__;
 const shown = L.layerGroup().addTo(map);
 function popup(d) {
-  const { v, c } = d.p[period];
+  const { v, c, s } = d.p[period];
   return `<b>${d.station}</b> &middot; ${d.fwy}${d.dir} ${d.lane}<br>${d.name ?? ''}
      <br><span style="color:var(--ink-2)">${PERIODS[period]}</span>
      <table>
+       <tr style="color:var(--ink-2)"><td></td><td>Volume</td><td>Change</td><td>mph</td></tr>
        ${YEARS.map((y, i) => `<tr><td>${y}</td><td>${fmt(v[i])}</td>
-         <td>${i ? pct(c[i - 1]) : ''}</td></tr>`).join('')}
+         <td>${i ? pct(c[i - 1]) : ''}</td><td>${mph(s[i])}</td></tr>`).join('')}
        <tr><td colspan="2"><b>${YEARS[0]}&rarr;${YEARS[YEARS.length - 1]}</b></td>
-         <td><b>${pct(c[c.length - 1])}</b></td></tr>
+         <td><b>${pct(c[c.length - 1])}</b></td><td></td></tr>
      </table>`;
 }
 const markers = DATA.map(d => {
   const m = L.circleMarker([d.lat, d.lon], {
     color: dark ? '#1a1a19' : '#fcfcfb', weight: 1, fillOpacity: 0.75,
   }).bindPopup(() => popup(d))
-    .bindTooltip(() => `${d.station}: ${fmt(v25(d))} vehicles (2025, ${PERIODS[period]})`);
+    .bindTooltip(() => mode === 'speed'
+      ? `${d.station}: ${mph(sp(d))} mph (${YEARS[yi]}, ${PERIODS[period]})`
+      : `${d.station}: ${fmt(v25(d))} vehicles (2025, ${PERIODS[period]})`);
   return { d, m };
 });
 function restyle() {
   markers.forEach(({ d, m }) => {
     m.setRadius(radius(v25(d)));
-    m.setStyle({ fillColor: CATS[d.p[period].t][0] });
+    m.setStyle({ fillColor: mode === 'speed'
+      ? SPEED_BINS[speedBin(sp(d))][0] : CATS[d.p[period].t][0] });
   });
   // Draw big dots first so small ones stay clickable on top.
   markers.sort((a, b) => v25(b.d) - v25(a.d));
@@ -483,6 +551,31 @@ Object.entries(PERIODS).forEach(([key, label]) => {
 periodBox.querySelectorAll('input').forEach(i => i.onchange = () => {
   period = i.value;
   map.closePopup();
+  restyle();
+  redraw();
+});
+
+// Speed year radio buttons, latest year selected.
+const yearBox = document.getElementById('yearFilter');
+YEARS.forEach((y, i) => {
+  const el = document.createElement('label');
+  el.innerHTML = `<input type="radio" name="year" value="${i}"${i === yi ? ' checked' : ''}> ${y}`;
+  yearBox.appendChild(el);
+});
+yearBox.querySelectorAll('input').forEach(i => i.onchange = () => {
+  yi = +i.value;
+  restyle();
+  redraw();
+});
+
+// Volume trend vs speed coloring; the trend checkboxes filter in both modes.
+document.querySelectorAll('#modeFilter input').forEach(i => i.onchange = () => {
+  mode = i.value;
+  const speed = mode === 'speed';
+  yearBox.hidden = !speed;
+  document.getElementById('speedLegend').hidden = !speed;
+  document.getElementById('trendHd').hidden = !speed;
+  document.body.classList.toggle('speed', speed);
   restyle();
   redraw();
 });
@@ -503,18 +596,68 @@ function redraw() {
   const lanes = new Set(
     [...laneBox.querySelectorAll('input:checked')].map(i => i.dataset.lane));
   const counts = {};
+  const speedCounts = {};
   shown.clearLayers();
   markers.forEach(({ d, m }) => {
     if (!lanes.has(d.lane)) return;
     // Counts reflect the lane filter, not the color toggles.
     const t = d.p[period].t;
     counts[t] = (counts[t] || 0) + 1;
-    if (document.getElementById(CATS[t][2]).checked) shown.addLayer(m);
+    if (!document.getElementById(CATS[t][2]).checked) return;
+    shown.addLayer(m);
+    // Speed counts follow every filter, i.e. the dots on the map.
+    const b = speedBin(sp(d));
+    speedCounts[b] = (speedCounts[b] || 0) + 1;
   });
   Object.entries(CATS).forEach(([trend, [, countId]]) => {
     document.getElementById(countId).textContent = (counts[trend] || 0).toLocaleString();
   });
+  Object.entries(SPEED_BINS).forEach(([b, [, countId]]) => {
+    document.getElementById(countId).textContent = (speedCounts[b] || 0).toLocaleString();
+  });
   renderTotals(lanes);
+  renderSpeeds(lanes);
+}
+
+// Volume-weighted speed per year, sum(v * s) / sum(v), by lane type for the
+// stations on the map; stations without a speed that year are left out.
+function renderSpeeds(lanes) {
+  document.getElementById('speedPeriod').innerHTML = PERIODS[period];
+  const groups = {};
+  DATA.forEach(d => {
+    const { v, s, t } = d.p[period];
+    if (!lanes.has(d.lane) || !document.getElementById(CATS[t][2]).checked) return;
+    [d.lane, 'Total'].forEach(k => {
+      const g = groups[k] ??= YEARS.map(() => ({ vs: 0, v: 0, n: 0 }));
+      s.forEach((sp, i) => {
+        if (sp == null) return;
+        g[i].vs += v[i] * sp; g[i].v += v[i]; g[i].n += 1;
+      });
+    });
+  });
+  const avg = g => g.v ? g.vs / g.v : null;
+  const keys = Object.keys(groups).filter(k => k !== 'Total' && groups[k].some(g => g.n))
+    .sort((a, b) => groups[b][YEARS.length - 1].n - groups[a][YEARS.length - 1].n);
+  if (!keys.length) {
+    document.getElementById('speedTable').innerHTML = '<p>No stations with speed data shown.</p>';
+    return;
+  }
+  const row = (k, cls = '') => {
+    const a = groups[k].map(avg);
+    const first = a[0], last = a[a.length - 1];
+    const change = first != null && last != null
+      ? (last - first > 0 ? '+' : '') + (last - first).toFixed(1) : '';
+    return `<tr class="${cls}">
+      <td>${k === 'Total' ? 'Total' : `${LANE_NAMES[k] ?? k} (${k})`}</td>
+      <td>${groups[k][YEARS.length - 1].n.toLocaleString()}</td>
+      ${a.map(x => `<td>${mph(x)}</td>`).join('')}<td>${change}</td></tr>`;
+  };
+  document.getElementById('speedTable').innerHTML = `<table>
+    <tr><th>Lane type</th><th>Stations</th>${YEARS.map(y => `<th>${y}</th>`).join('')}
+      <th>${YEARS[0]}&rarr;${YEARS[YEARS.length - 1]}</th></tr>
+    ${keys.map(k => row(k)).join('')}
+    ${row('Total', 'total')}
+  </table>`;
 }
 
 function renderTotals(lanes) {
@@ -610,6 +753,8 @@ html = (
     .replace("__LANE_NAMES__", json.dumps(LANE_TYPE_NAMES))
     .replace("__DECLINE__", f"{DECLINE_PCT:g}")
     .replace("__SLIGHT__", f"{SLIGHT_DECLINE_PCT:g}")
+    .replace("__SLOW__", f"{CONGESTED_MPH:g}")
+    .replace("__FAST__", f"{FREE_FLOW_MPH:g}")
     .replace("__STATION_COUNTS__", station_counts_html)
     .replace("__TOTALS__", json.dumps({
         key: json.loads(lane_totals(key).reset_index().to_json(orient="records"))

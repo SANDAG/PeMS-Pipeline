@@ -32,6 +32,7 @@ def create_silver_pems_weekday_counts():
             F.col("samples"),
             F.col("percent_observed"),
             F.col("total_flow"),
+            F.col("avg_speed"),
         )
         .filter(F.col("timestamp").isNotNull())
         .filter(F.col("station").isNotNull())
@@ -284,6 +285,106 @@ def create_silver_pems_weekday_counts():
             ).alias("samples_ev"),
 
             # -------------------------------------------------------------
+            # Flow-weighted speed: sum(avg_speed * total_flow) over
+            # intervals that report a speed, divided below by the flow of
+            # those same intervals.
+            # -------------------------------------------------------------
+
+            F.sum(
+                F.when(
+                    F.col("avg_speed").isNotNull(),
+                    F.col("avg_speed") * F.col("total_flow"),
+                )
+            ).alias("speed_flow_day"),
+
+            F.sum(
+                F.when(
+                    F.col("avg_speed").isNotNull(),
+                    F.col("total_flow"),
+                )
+            ).alias("speed_weight_day"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "EA")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("avg_speed") * F.col("total_flow"),
+                )
+            ).alias("speed_flow_ea"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "EA")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("total_flow"),
+                )
+            ).alias("speed_weight_ea"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "AM")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("avg_speed") * F.col("total_flow"),
+                )
+            ).alias("speed_flow_am"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "AM")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("total_flow"),
+                )
+            ).alias("speed_weight_am"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "MD")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("avg_speed") * F.col("total_flow"),
+                )
+            ).alias("speed_flow_md"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "MD")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("total_flow"),
+                )
+            ).alias("speed_weight_md"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "PM")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("avg_speed") * F.col("total_flow"),
+                )
+            ).alias("speed_flow_pm"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "PM")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("total_flow"),
+                )
+            ).alias("speed_weight_pm"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "EV")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("avg_speed") * F.col("total_flow"),
+                )
+            ).alias("speed_flow_ev"),
+
+            F.sum(
+                F.when(
+                    (F.col("time_period") == "EV")
+                    & F.col("avg_speed").isNotNull(),
+                    F.col("total_flow"),
+                )
+            ).alias("speed_weight_ev"),
+
+            # -------------------------------------------------------------
             # Completeness counts
             # -------------------------------------------------------------
 
@@ -352,6 +453,36 @@ def create_silver_pems_weekday_counts():
             "analysis_period",
             F.concat(F.lit("September-October "), F.col("year")),
         )
+        .withColumn(
+            "speed_day",
+            F.col("speed_flow_day")
+            / F.when(F.col("speed_weight_day") > 0, F.col("speed_weight_day")),
+        )
+        .withColumn(
+            "speed_ea",
+            F.col("speed_flow_ea")
+            / F.when(F.col("speed_weight_ea") > 0, F.col("speed_weight_ea")),
+        )
+        .withColumn(
+            "speed_am",
+            F.col("speed_flow_am")
+            / F.when(F.col("speed_weight_am") > 0, F.col("speed_weight_am")),
+        )
+        .withColumn(
+            "speed_md",
+            F.col("speed_flow_md")
+            / F.when(F.col("speed_weight_md") > 0, F.col("speed_weight_md")),
+        )
+        .withColumn(
+            "speed_pm",
+            F.col("speed_flow_pm")
+            / F.when(F.col("speed_weight_pm") > 0, F.col("speed_weight_pm")),
+        )
+        .withColumn(
+            "speed_ev",
+            F.col("speed_flow_ev")
+            / F.when(F.col("speed_weight_ev") > 0, F.col("speed_weight_ev")),
+        )
         .select(
             "service_date",
             "year",
@@ -370,6 +501,12 @@ def create_silver_pems_weekday_counts():
             "count_md",
             "count_pm",
             "count_ev",
+            "speed_day",
+            "speed_ea",
+            "speed_am",
+            "speed_md",
+            "speed_pm",
+            "speed_ev",
             "samples_day",
             "samples_ea",
             "samples_am",

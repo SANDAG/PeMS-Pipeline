@@ -8,6 +8,7 @@ def weighted_period_average(
     periods_column: str,
     expected_periods: int,
     output_name: str,
+    decimals: int = 0,
 ):
     valid_period = (
         (F.col(periods_column) == expected_periods)
@@ -30,21 +31,23 @@ def weighted_period_average(
         )
     )
 
-    return (
-        F.round(
-            weighted_sum
-            / F.when(total_weight > 0, total_weight),
-            0,
-        )
-        .cast("long")
-        .alias(output_name)
+    average = F.round(
+        weighted_sum
+        / F.when(total_weight > 0, total_weight),
+        decimals,
     )
+
+    # Counts stay whole numbers; speeds keep their decimals.
+    if decimals == 0:
+        average = average.cast("long")
+
+    return average.alias(output_name)
 
 @dp.materialized_view(
     name="gold_pems_weekday_counts",
     comment=(
         "Sample-weighted average nonholiday weekday traffic counts "
-        "by station for September and October, 2022-2025, from complete, "
+        "and speeds by station for September and October, 2022-2025, from complete, "
         "fully observed (no imputed values) station-days"
     ),
     table_properties={
@@ -121,6 +124,60 @@ def create_gold_pems_weekday_counts():
                 "count_ev",
             ),
 
+            weighted_period_average(
+                "speed_day",
+                "samples_day",
+                "periods_day",
+                288,
+                "speed_day",
+                decimals=1,
+            ),
+
+            weighted_period_average(
+                "speed_ea",
+                "samples_ea",
+                "periods_ea",
+                36,
+                "speed_ea",
+                decimals=1,
+            ),
+
+            weighted_period_average(
+                "speed_am",
+                "samples_am",
+                "periods_am",
+                36,
+                "speed_am",
+                decimals=1,
+            ),
+
+            weighted_period_average(
+                "speed_md",
+                "samples_md",
+                "periods_md",
+                78,
+                "speed_md",
+                decimals=1,
+            ),
+
+            weighted_period_average(
+                "speed_pm",
+                "samples_pm",
+                "periods_pm",
+                42,
+                "speed_pm",
+                decimals=1,
+            ),
+
+            weighted_period_average(
+                "speed_ev",
+                "samples_ev",
+                "periods_ev",
+                96,
+                "speed_ev",
+                decimals=1,
+            ),
+
             F.countDistinct("service_date").alias(
                 "number_of_weekdays"
             ),
@@ -152,6 +209,12 @@ def create_gold_pems_weekday_counts():
             "count_md",
             "count_pm",
             "count_ev",
+            "speed_day",
+            "speed_ea",
+            "speed_am",
+            "speed_md",
+            "speed_pm",
+            "speed_ev",
             "number_of_weekdays",
             "first_service_date",
             "last_service_date",

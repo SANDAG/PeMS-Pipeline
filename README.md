@@ -15,7 +15,8 @@ Raw PeMS
 
 A Quarto QA/QC report is available under `reports/pems_quality/`.
 
-An interactive map of 2022-2025 weekday volume trends by station is built by
+An interactive map of 2022-2025 weekday volume trends by station, with a
+switch to color stations by average weekday speed instead, is built by
 `analysis/station_volume_trends.py` and published at
 https://sandag.github.io/PeMS-Pipeline/station_volume_trends/.
 
