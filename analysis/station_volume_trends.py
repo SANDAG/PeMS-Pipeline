@@ -35,9 +35,10 @@
 # Speed: gold's speed_* columns (same station-day filters; flow-weighted per
 # day, sample-weighted across days). The map's "Color by" switch recolors the
 # dots by a selected year's average speed (< CONGESTED_MPH red, < FREE_FLOW_MPH
-# yellow, else blue) while the volume-trend checkboxes still filter stations,
-# so e.g. only the red (decreasing volume) stations can be checked for low,
-# possibly congested speeds. Popups always show both volume and speed.
+# yellow, else blue). In speed mode the volume-trend legend is hidden but its
+# checkboxes stay as a filter, so e.g. only decreasing-volume stations can be
+# checked for low, possibly congested speeds. Popups always show both volume
+# and speed.
 # Stations whose detectors report no speed are drawn gray in speed mode.
 
 # %%
@@ -370,8 +371,13 @@ MAP_HTML = """<!doctype html>
   .legend > span.hd { font-weight: 600; color: var(--ink); }
   .legend label { cursor: pointer; }
   [hidden] { display: none !important; }
-  /* Speed mode: trend rows are filters only; their swatches would clash. */
-  body.speed #trendLegend .sw { display: none; }
+  /* Speed mode: the trend legend is hidden; its checkboxes stay as a filter,
+     named by trend rather than by color. */
+  .speedOnly, body.speed .volOnly { display: none; }
+  body.speed .speedOnly { display: inline; }
+  .toggle { flex-wrap: wrap; }
+  .toggle label, .toggle .hd { white-space: nowrap; }
+  .toggle .hd { font-weight: 600; color: var(--ink); }
   .search { display: flex; gap: 8px; align-items: center; }
   .search input { font: inherit; color: var(--ink); background: var(--surface);
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; width: 9em; }
@@ -421,14 +427,15 @@ MAP_HTML = """<!doctype html>
   <span><span class="sw" style="background:var(--up)"></span>__FAST__ mph or more (<span id="nFast"></span>)</span>
   <span><span class="sw" style="background:var(--none)"></span>No speed data (<span id="nNone"></span>)</span>
 </div>
-<div class="legend" id="trendLegend"><span class="hd" id="trendHd" hidden>Show stations with volume trend:</span>
-  <span><span class="sw" style="background:var(--up)"></span>Up, or down less than __SLIGHT__% (<span id="nUp"></span>)</span>
-  <span><span class="sw" style="background:var(--slight)"></span>Down __SLIGHT__&ndash;__DECLINE__% (<span id="nSlight"></span>)</span>
-  <span><span class="sw" style="background:var(--down)"></span>Down more than __DECLINE__% (<span id="nDown"></span>)</span>
+<div class="legend" id="trendLegend">
+  <span class="volOnly"><span class="sw" style="background:var(--up)"></span>Up, or down less than __SLIGHT__% (<span id="nUp"></span>)</span>
+  <span class="volOnly"><span class="sw" style="background:var(--slight)"></span>Down __SLIGHT__&ndash;__DECLINE__% (<span id="nSlight"></span>)</span>
+  <span class="volOnly"><span class="sw" style="background:var(--down)"></span>Down more than __DECLINE__% (<span id="nDown"></span>)</span>
   <span class="toggle">
-    <label><input type="checkbox" id="showUp" checked> blue</label>
-    <label><input type="checkbox" id="showSlight" checked> yellow</label>
-    <label><input type="checkbox" id="showDown" checked> red</label>
+    <span class="hd speedOnly">Volume 2022&rarr;2025:</span>
+    <label><input type="checkbox" id="showUp" checked> <span class="volOnly">blue</span><span class="speedOnly">up or flat</span></label>
+    <label><input type="checkbox" id="showSlight" checked> <span class="volOnly">yellow</span><span class="speedOnly">down __SLIGHT__&ndash;__DECLINE__%</span></label>
+    <label><input type="checkbox" id="showDown" checked> <span class="volOnly">red</span><span class="speedOnly">down &gt; __DECLINE__%</span></label>
   </span>
 </div>
 <div class="legend" id="periodFilter"><span>Time period:</span></div>
@@ -574,7 +581,6 @@ document.querySelectorAll('#modeFilter input').forEach(i => i.onchange = () => {
   const speed = mode === 'speed';
   yearBox.hidden = !speed;
   document.getElementById('speedLegend').hidden = !speed;
-  document.getElementById('trendHd').hidden = !speed;
   document.body.classList.toggle('speed', speed);
   restyle();
   redraw();
@@ -592,6 +598,8 @@ Object.entries(laneCounts).sort((a, b) => b[1] - a[1]).forEach(([lane, n]) => {
   laneBox.appendChild(label);
 });
 
+const trendShown = t => document.getElementById(CATS[t][2]).checked;
+
 function redraw() {
   const lanes = new Set(
     [...laneBox.querySelectorAll('input:checked')].map(i => i.dataset.lane));
@@ -603,7 +611,7 @@ function redraw() {
     // Counts reflect the lane filter, not the color toggles.
     const t = d.p[period].t;
     counts[t] = (counts[t] || 0) + 1;
-    if (!document.getElementById(CATS[t][2]).checked) return;
+    if (!trendShown(t)) return;
     shown.addLayer(m);
     // Speed counts follow every filter, i.e. the dots on the map.
     const b = speedBin(sp(d));
@@ -626,7 +634,7 @@ function renderSpeeds(lanes) {
   const groups = {};
   DATA.forEach(d => {
     const { v, s, t } = d.p[period];
-    if (!lanes.has(d.lane) || !document.getElementById(CATS[t][2]).checked) return;
+    if (!lanes.has(d.lane) || !trendShown(t)) return;
     [d.lane, 'Total'].forEach(k => {
       const g = groups[k] ??= YEARS.map(() => ({ vs: 0, v: 0, n: 0 }));
       s.forEach((sp, i) => {
