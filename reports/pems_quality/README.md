@@ -73,7 +73,7 @@ DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/<warehouse id>
 
 **3. Render the report:**
 ```bash
-uv run --env-file .env quarto render reports/pems_quality
+uv run quarto render reports/pems_quality
 ```
 This is the step where the SQL files under `sql/` actually get read and
 executed against your warehouse — there's no separate command for them.
