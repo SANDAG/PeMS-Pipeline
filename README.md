@@ -34,17 +34,14 @@ DATABRICKS_CONFIG_PROFILE=<profile name>
 details). `DATABRICKS_CONFIG_PROFILE` is optional (default `dev`); use any
 valid profile from `databricks auth profiles`.
 
+See `example.env` for a template.
+
 Build the map and CSVs:
 
 ```bash
 uv run --env-file .env python analysis/station_volume_trends.py
 ```
-
-Limit to specific lane types (e.g. ML mainline, HV HOV):
-
-```bash
-uv run --env-file .env python analysis/station_volume_trends.py --lane-types ML,HV
-```
+`--env-file .env` was specifed here to avoid confusion of which account to log onto databricks, if a user has multiple accounts.
 
 ## Development
 
